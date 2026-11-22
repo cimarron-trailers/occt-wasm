@@ -1,0 +1,186 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# SPDX-FileCopyrightText: Cimarron Trailers
+name: Fork release
+
+# The cimarron-trailers fork's release: one npm package, built from a tag that
+# names upstream's version and the fork's revision (v5.6.0-cim.1), published as
+# the asset of that tag's GitHub release. The app pins the asset's URL.
+#
+# - Built with upstream's toolchain: the tag's own Dockerfile.builder (emsdk,
+#   Rust, OCCT from the pinned submodule, about an hour), never a prebuilt image
+#   from a registry, then upstream's build and test steps (build-wasm.yml's, in
+#   release mode) inside it.
+# - The package declares what it holds, (MIT OR Apache-2.0) AND LGPL-2.1-only,
+#   and carries the license texts and the tag's source URL (scripts/fork-pack.mjs
+#   writes them; nothing is written by hand).
+# - Releases are immutable (the repository setting): a published release takes
+#   no asset and never changes, so the package goes to a draft, which is then
+#   published.
+#
+# Upstream's own workflows are disabled on the fork (gh workflow disable), never
+# edited, so that they merge untouched on every rebase.
+
+on:
+  push:
+    tags: ["v*-cim.*"]
+
+permissions: {}
+
+# Never cancel a release part-way: a half-published release is worse than a slow one.
+concurrency:
+  group: fork-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build, test and pack
+    if: github.repository == 'cimarron-trailers/occt-wasm'
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    # This job runs the build's own code (npm and cargo build scripts), so it
+    # holds no token that can write.
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.tag.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Read the tag
+        id: tag
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-cim\.[1-9][0-9]*$ ]]; then
+            echo "::error::$TAG is not vX.Y.Z-cim.N (upstream's version, then the fork's revision)"
+            exit 1
+          fi
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      # OCCT's build and its image take most of a hosted runner's free disk.
+      - name: Free disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - name: Build upstream's toolchain image (Dockerfile.builder)
+        run: docker build --progress=plain -f Dockerfile.builder -t occt-wasm-builder:release .
+
+      # ci.yml's codegen drift check first (ci.yml is disabled on the fork, so this
+      # is where the generated files are held to their specs), then build-wasm.yml's
+      # steps with `release: true`, which skips the bench gate.
+      - name: Build and test
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src occt-wasm-builder:release bash -euo pipefail -c '
+            git config --global --add safe.directory "*"
+            cargo xtask codegen
+            cargo fmt --all
+            if ! git diff --exit-code; then
+              echo "::error::The tag is not what codegen and cargo fmt make of it: regenerate, never hand-edit."
+              exit 1
+            fi
+            cp -r /workspace/occt/build occt/build
+            cp -r /workspace/3rdparty 3rdparty
+            npm ci
+            (cd ts && npm ci)
+            cargo xtask build --release
+            (cd ts && npm run build && cp ../dist/occt-wasm.js ../dist/occt-wasm.wasm dist/)
+            npx vitest run
+            npm run test:bundler
+            for example in examples/node-cli/*.mjs; do
+              echo "== $example"
+              node "$example"
+            done
+          '
+
+      # Upstream packs (npm publish) on Node 24; so does the fork.
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+
+      - name: Pack
+        env:
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ steps.tag.outputs.version }}
+          REPOSITORY_URL: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          set -euo pipefail
+          node scripts/fork-pack.mjs "$TAG" "$REPOSITORY_URL"
+          (cd ts && npm pack)
+          package="ts/occt-wasm-$VERSION.tgz"
+          listing=$(tar -tzf "$package")
+          for file in package.json dist/occt-wasm.wasm dist/occt-wasm.js dist/index.js \
+                      LICENSE-MIT LICENSE-APACHE LICENSE-LGPL-2.1 OCCT_LGPL_EXCEPTION.txt SOURCE.txt; do
+            grep -qx "package/$file" <<< "$listing" || { echo "::error::the package holds no $file"; exit 1; }
+          done
+          license=$(tar -xOzf "$package" package/package.json | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8")).license')
+          [ "$license" = "(MIT OR Apache-2.0) AND LGPL-2.1-only" ] || { echo "::error::the package declares $license"; exit 1; }
+          tar -xOzf "$package" package/SOURCE.txt
+
+      - name: Upload the package
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: occt-wasm-package
+          path: ts/occt-wasm-${{ steps.tag.outputs.version }}.tgz
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Draft, upload, publish
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: occt-wasm-package
+
+      - name: Draft the release, upload the package, publish it
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          set -euo pipefail
+          package="occt-wasm-$VERSION.tgz"
+          url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$TAG/$package"
+          integrity="sha512-$(openssl dgst -sha512 -binary "$package" | base64 -w0)"
+          sha256=$(sha256sum "$package" | cut -d' ' -f1)
+
+          # A draft left by an earlier failed run is drafted again. A published
+          # release is immutable: it is never touched, and the run fails.
+          if draft=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null); then
+            if [ "$draft" != "true" ]; then
+              echo "::error::$TAG is already published, and a published release never changes"
+              exit 1
+            fi
+            gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --yes
+          fi
+
+          {
+            echo "occt-wasm $VERSION, built from this tag by its fork-release workflow."
+            echo
+            echo "Licensed (MIT OR Apache-2.0) AND LGPL-2.1-only: the package carries the license"
+            echo "texts, and SOURCE.txt names this tag as its source."
+            echo
+            echo "Pin it in package.json:"
+            echo
+            echo '```json'
+            echo "\"occt-wasm\": \"$url\""
+            echo '```'
+            echo
+            echo "- npm integrity: \`$integrity\`"
+            echo "- sha256: \`$sha256\`"
+          } > notes.md
+
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --draft \
+            --title "$TAG" --notes-file notes.md "$package"
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false
+          echo "Published $url"

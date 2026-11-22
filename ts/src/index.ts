@@ -137,6 +137,24 @@ import type {
 // entry types so getRawModule()/getRawKernel() consumers keep their types.
 export type { OcctWasmModule, OcctRawKernel } from "./raw-types.js";
 
+// Sub-shape identity by position (cimarron-trailers fork): the answers' types.
+export type {
+    FaceFate,
+    GeneratedFace,
+    MovedPositions,
+    PositionAdjacency,
+    PositionHistory,
+} from "./sub-shape-identity.js";
+import {
+    decodeAdjacency,
+    decodeMovedPositions,
+    decodePositionHistory,
+    readEdgeData,
+    type MovedPositions,
+    type PositionAdjacency,
+    type PositionHistory,
+} from "./sub-shape-identity.js";
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -2264,6 +2282,149 @@ export class OcctKernel {
             // Raw kernel was already deleted externally (e.g. by an adapter
             // following Embind teardown conventions) — ignore, matching the
             // FinalizationRegistry callback's behavior.
+        }
+    }
+
+    // =======================================================================
+    // Sub-shape identity by position (cimarron-trailers fork)
+    //
+    // Each call answers by POSITION — a sub-shape's index in its shape's list of
+    // that type, the order getSubShapes() lists, found by IsSame — and never by
+    // a hash number. The answers' types and decoding: sub-shape-identity.ts.
+    // =======================================================================
+
+    /** {@link cut}, answering what became of every face of `body` and of `tool`, by position. */
+    cutWithPositionHistory(body: ShapeHandle, tool: ShapeHandle): PositionHistory {
+        return wrap("cutWithPositionHistory", () =>
+            decodePositionHistory(
+                this.#drainU32(this.#raw.cutWithPositionHistory(body, tool)), "cutWithPositionHistory"),
+        );
+    }
+
+    /** {@link fuse}, answering what became of every face of `body` and of `tool`, by position. */
+    fuseWithPositionHistory(body: ShapeHandle, tool: ShapeHandle): PositionHistory {
+        return wrap("fuseWithPositionHistory", () =>
+            decodePositionHistory(
+                this.#drainU32(this.#raw.fuseWithPositionHistory(body, tool)), "fuseWithPositionHistory"),
+        );
+    }
+
+    /** {@link intersect}, answering what became of every face of `body` and of `tool`, by position. */
+    intersectWithPositionHistory(body: ShapeHandle, tool: ShapeHandle): PositionHistory {
+        return wrap("intersectWithPositionHistory", () =>
+            decodePositionHistory(
+                this.#drainU32(this.#raw.intersectWithPositionHistory(body, tool)), "intersectWithPositionHistory"),
+        );
+    }
+
+    /** {@link mirror}, answering what became of every face of `shape` — each its one image — by position. */
+    mirrorWithPositionHistory(shape: ShapeHandle, point: Vec3, normal: Vec3): PositionHistory {
+        return wrap("mirrorWithPositionHistory", () =>
+            decodePositionHistory(
+                this.#drainU32(this.#raw.mirrorWithPositionHistory(
+                    shape, point.x, point.y, point.z, normal.x, normal.y, normal.z)),
+                "mirrorWithPositionHistory"),
+        );
+    }
+
+    /**
+     * {@link meshShape} — the same mesher, so the same triangles — with each `faceGroups`
+     * triple `[start, count, position]`: its face's position in `getSubShapes(shape, "face")`.
+     * A face the mesher walks twice names its one position both times.
+     */
+    meshShapeByPosition(shape: ShapeHandle, options?: TessellateOptions): Mesh {
+        return wrap("meshShapeByPosition", () => {
+            const linDefl = options?.linearDeflection ?? 0.1;
+            const angDefl = options?.angularDeflection ?? 0.5;
+            return this.#extractMeshWithFaceGroups(this.#raw.meshShapeByPosition(shape, linDefl, angDefl));
+        });
+    }
+
+    /**
+     * {@link wireframe} — each edge's polyline the one `wireframe` draws for it — with each
+     * `edgeGroups` triple `[start, count, position]`: its edge's position in
+     * `getSubShapes(shape, "edge")`. An edge `wireframe` skips (a degenerate one) has no group,
+     * so a group's index is not its position.
+     */
+    wireframeByPosition(shape: ShapeHandle, options: number | WireframeOptions = 0.1): EdgeData {
+        return wrap("wireframeByPosition", () => {
+            const opts = typeof options === "number" ? { deflection: options } : options;
+            const deflection = opts.deflection ?? 0.1;
+            const source = opts.source === "triangulation" ? 1 : 0;
+            return readEdgeData(this.#module, this.#raw.wireframeByPosition(shape, deflection, source));
+        });
+    }
+
+    /** Which of `shape`'s faces, edges and vertices meet, by position in its own lists. */
+    adjacencyByPosition(shape: ShapeHandle): PositionAdjacency {
+        return wrap("adjacencyByPosition", () =>
+            decodeAdjacency(this.#drainU32(this.#raw.adjacencyByPosition(shape)), "adjacencyByPosition"),
+        );
+    }
+
+    /**
+     * `sub`'s position in `shape`'s list of `sub`'s type — the `i` for which
+     * `isSame(getSubShapes(shape, type)[i], sub)` — or `null` where it is none of them.
+     */
+    subShapePosition(shape: ShapeHandle, sub: ShapeHandle): number | null {
+        return wrap("subShapePosition", () => {
+            const at = this.#raw.subShapePosition(shape, sub);
+            return at < 0 ? null : at;
+        });
+    }
+
+    /** {@link translate}, answering where the copy put each face, edge and vertex, by position. */
+    translateWithPositions(shape: ShapeHandle, dx: number, dy: number, dz: number): MovedPositions {
+        return wrap("translateWithPositions", () =>
+            decodeMovedPositions(
+                this.#drainU32(this.#raw.translateWithPositions(shape, dx, dy, dz)), "translateWithPositions"),
+        );
+    }
+
+    /** {@link rotate}, answering where the copy put each face, edge and vertex, by position. */
+    rotateWithPositions(
+        shape: ShapeHandle,
+        axis: { point: Vec3; direction: Vec3 },
+        angleRad: number,
+    ): MovedPositions {
+        return wrap("rotateWithPositions", () =>
+            decodeMovedPositions(
+                this.#drainU32(this.#raw.rotateWithPositions(
+                    shape,
+                    axis.point.x, axis.point.y, axis.point.z,
+                    axis.direction.x, axis.direction.y, axis.direction.z,
+                    angleRad,
+                )),
+                "rotateWithPositions"),
+        );
+    }
+
+    /** {@link mirror}, answering where the copy put each face, edge and vertex, by position. */
+    mirrorWithPositions(shape: ShapeHandle, point: Vec3, normal: Vec3): MovedPositions {
+        return wrap("mirrorWithPositions", () =>
+            decodeMovedPositions(
+                this.#drainU32(this.#raw.mirrorWithPositions(
+                    shape, point.x, point.y, point.z, normal.x, normal.y, normal.z)),
+                "mirrorWithPositions"),
+        );
+    }
+
+    /** {@link transform}, answering where the copy put each face, edge and vertex, by position. */
+    transformWithPositions(shape: ShapeHandle, matrix: number[]): MovedPositions {
+        return wrap("transformWithPositions", () =>
+            this.#withF64(matrix, (vec) =>
+                decodeMovedPositions(
+                    this.#drainU32(this.#raw.transformWithPositions(shape, vec)), "transformWithPositions"),
+            ),
+        );
+    }
+
+    /** A returned uint32 vector, read to numbers, then deleted. */
+    #drainU32(vec: EmbindVectorU32): number[] {
+        try {
+            return this.#readVector(vec, Uint32Array, vec.size());
+        } finally {
+            vec.delete();
         }
     }
 

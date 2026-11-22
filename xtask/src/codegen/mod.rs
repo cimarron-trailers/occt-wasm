@@ -5,6 +5,7 @@
 
 pub mod config;
 pub mod emitter;
+pub mod fork;
 pub mod run;
 pub mod rust_emitter;
 pub mod types;

@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# SPDX-FileCopyrightText: Cimarron Trailers
+#
+# The fork's own: every text file is checked out with LF on every platform. A Windows checkout under
+# Git's default autocrlf otherwise writes CRLF, which breaks the Docker builds (Dockerfile.builder's
+# scripts, the codegen's drift check). Upstream has no .gitattributes.
+* text=auto eol=lf

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <string>
 #include <unordered_map>
@@ -9,6 +10,7 @@
 #include <TDF_Label.hxx>
 #include <TDocStd_Application.hxx>
 #include <TDocStd_Document.hxx>
+#include <TopoDS_Face.hxx>
 #include <TopoDS_Shape.hxx>
 
 // XCAF helpers (defined in kernel.cpp, used by generated xcaf methods)
@@ -125,6 +127,25 @@ class OcctKernel {
   public:
     OcctKernel();
     ~OcctKernel();
+
+    // --- Sub-shape identity by position (cimarron-trailers fork) ---
+    // Specs in xtask/src/codegen/fork.rs, helpers in sub_shape_identity.h: every
+    // answer names a sub-shape by its position in its shape's list, never by a hash.
+    std::vector<uint32_t> cutWithPositionHistory(uint32_t a, uint32_t b);
+    std::vector<uint32_t> fuseWithPositionHistory(uint32_t a, uint32_t b);
+    std::vector<uint32_t> intersectWithPositionHistory(uint32_t a, uint32_t b);
+    std::vector<uint32_t> mirrorWithPositionHistory(uint32_t id, double px, double py, double pz,
+                                                    double nx, double ny, double nz);
+    MeshData meshShapeByPosition(uint32_t id, double linearDeflection, double angularDeflection);
+    EdgeData wireframeByPosition(uint32_t id, double deflection, int source);
+    std::vector<uint32_t> adjacencyByPosition(uint32_t id);
+    int subShapePosition(uint32_t shapeId, uint32_t subId);
+    std::vector<uint32_t> translateWithPositions(uint32_t id, double dx, double dy, double dz);
+    std::vector<uint32_t> rotateWithPositions(uint32_t id, double px, double py, double pz,
+                                              double dx, double dy, double dz, double angleRad);
+    std::vector<uint32_t> mirrorWithPositions(uint32_t id, double px, double py, double pz,
+                                              double nx, double ny, double nz);
+    std::vector<uint32_t> transformWithPositions(uint32_t id, std::vector<double> matrix);
 
     // --- Arena management ---
     void release(uint32_t id);
@@ -494,8 +515,14 @@ class OcctKernel {
     uint32_t store(const TopoDS_Shape& shape);
     const TopoDS_Shape& get(uint32_t id) const;
     TopoDS_Shape normalizeSolidOrientation(const TopoDS_Shape& shape);
+    /// What names a mesh's face group: the third int of its `faceGroups` triple.
+    using FaceGroupName = std::function<int(const TopoDS_Face&)>;
+    /// The one mesher. Each face group is named by `groupName`; without it, by
+    /// its face's hash, as `tessellate`/`meshShape` name them.
     MeshData buildMeshData(const TopoDS_Shape& shape, double linearDeflection,
                            double angularDeflection, bool relative);
+    MeshData buildMeshData(const TopoDS_Shape& shape, double linearDeflection,
+                           double angularDeflection, bool relative, const FaceGroupName& groupName);
 
     std::unordered_map<uint32_t, TopoDS_Shape> arena_;
     uint32_t nextId_ = 1;

@@ -169,6 +169,7 @@
 #include <gp_Vec.hxx>
 #include <memory>
 #include <stdexcept>
+#include <sub_shape_identity.h>
 #include <unordered_set>
 
 #include <algorithm>
@@ -4943,4 +4944,223 @@ std::vector<int> OcctKernel::vectorI32FromHeap(int ptr, int count) {
     const int* p =
         reinterpret_cast<const int*>(static_cast<uintptr_t>(static_cast<uint32_t>(ptr)));
     return std::vector<int>(p, p + count);
+}
+
+// === identity ===
+
+std::vector<uint32_t> OcctKernel::cutWithPositionHistory(uint32_t a, uint32_t b) {
+    try {
+        const auto& shapeA = get(a);
+        const auto& shapeB = get(b);
+        BRepAlgoAPI_Cut op;
+        buildBoolean(op, shapeA, shapeB);
+        if (!op.IsDone() || op.HasErrors()) {
+            throw std::runtime_error("cutWithPositionHistory: boolean operation failed");
+        }
+        BatchScope result(*this, 1);
+        const uint32_t resultId = result.add(op.Shape());
+        std::vector<uint32_t> answer = sub_shape_identity::faceHistory(
+            op, resultId, op.Shape(), {shapeA, shapeB}, "cutWithPositionHistory");
+        result.take();
+        return answer;
+    } catch (const Standard_Failure& e) {
+        throw std::runtime_error(std::string("cutWithPositionHistory: ") + e.what());
+    }
+}
+
+std::vector<uint32_t> OcctKernel::fuseWithPositionHistory(uint32_t a, uint32_t b) {
+    try {
+        const auto& shapeA = get(a);
+        const auto& shapeB = get(b);
+        BRepAlgoAPI_Fuse op;
+        buildBoolean(op, shapeA, shapeB);
+        if (!op.IsDone() || op.HasErrors()) {
+            throw std::runtime_error("fuseWithPositionHistory: boolean operation failed");
+        }
+        BatchScope result(*this, 1);
+        const uint32_t resultId = result.add(op.Shape());
+        std::vector<uint32_t> answer = sub_shape_identity::faceHistory(
+            op, resultId, op.Shape(), {shapeA, shapeB}, "fuseWithPositionHistory");
+        result.take();
+        return answer;
+    } catch (const Standard_Failure& e) {
+        throw std::runtime_error(std::string("fuseWithPositionHistory: ") + e.what());
+    }
+}
+
+std::vector<uint32_t> OcctKernel::intersectWithPositionHistory(uint32_t a, uint32_t b) {
+    try {
+        const auto& shapeA = get(a);
+        const auto& shapeB = get(b);
+        BRepAlgoAPI_Common op;
+        buildBoolean(op, shapeA, shapeB);
+        if (!op.IsDone() || op.HasErrors()) {
+            throw std::runtime_error("intersectWithPositionHistory: boolean operation failed");
+        }
+        BatchScope result(*this, 1);
+        const uint32_t resultId = result.add(op.Shape());
+        std::vector<uint32_t> answer = sub_shape_identity::faceHistory(
+            op, resultId, op.Shape(), {shapeA, shapeB}, "intersectWithPositionHistory");
+        result.take();
+        return answer;
+    } catch (const Standard_Failure& e) {
+        throw std::runtime_error(std::string("intersectWithPositionHistory: ") + e.what());
+    }
+}
+
+std::vector<uint32_t> OcctKernel::mirrorWithPositionHistory(uint32_t id, double px, double py, double pz, double nx, double ny, double nz) {
+    try {
+        const auto& shape = get(id);
+        gp_Trsf trsf;
+        trsf.SetMirror(gp_Ax2(gp_Pnt(px, py, pz), gp_Dir(nx, ny, nz)));
+        BRepBuilderAPI_Transform maker(shape, trsf, true);
+        BatchScope result(*this, 1);
+        const uint32_t resultId = result.add(maker.Shape());
+        std::vector<uint32_t> answer = sub_shape_identity::faceHistory(
+            maker, resultId, maker.Shape(), {shape}, "mirrorWithPositionHistory");
+        result.take();
+        return answer;
+    } catch (const Standard_Failure& e) {
+        throw std::runtime_error(std::string("mirrorWithPositionHistory: ") + e.what());
+    }
+}
+
+MeshData OcctKernel::meshShapeByPosition(uint32_t id, double linearDeflection, double angularDeflection) {
+    try {
+        const auto& shape = get(id);
+        const sub_shape_identity::ShapeList faces = sub_shape_identity::listOf(shape, TopAbs_FACE);
+        return buildMeshData(shape, linearDeflection, angularDeflection, false,
+                             [&faces](const TopoDS_Face& face) {
+                                 return sub_shape_identity::positionIn(faces, face);
+                             });
+    } catch (const Standard_Failure& e) {
+        throw std::runtime_error(std::string("meshShapeByPosition: ") + e.what());
+    }
+}
+
+EdgeData OcctKernel::wireframeByPosition(uint32_t id, double deflection, int source) {
+    try {
+        const auto& shape = get(id);
+        const sub_shape_identity::ShapeList edges = sub_shape_identity::listOf(shape, TopAbs_EDGE);
+        std::vector<float> points;
+        std::vector<int32_t> groups;
+        for (int i = 1; i <= edges.Extent(); i++) {
+            BatchScope held(*this, 1);
+            const EdgeData one = wireframe(held.add(edges.FindKey(i)), deflection, source);
+            for (int g = 0; g + 2 < one.edgeGroupCount; g += 3) {
+                const int start = one.edgeGroups[g];
+                const int count = one.edgeGroups[g + 1];
+                groups.push_back(static_cast<int32_t>(points.size()));
+                groups.push_back(count);
+                groups.push_back(i - 1);
+                points.insert(points.end(), one.points + start, one.points + start + count);
+            }
+        }
+        EdgeData result;
+        result.pointCount = static_cast<int>(points.size());
+        result.edgeGroupCount = static_cast<int>(groups.size());
+        result.points = static_cast<float*>(std::malloc(points.size() * sizeof(float)));
+        result.edgeGroups = static_cast<int32_t*>(std::malloc(groups.size() * sizeof(int32_t)));
+        if ((!result.points && !points.empty()) || (!result.edgeGroups && !groups.empty())) {
+            throw std::runtime_error("wireframeByPosition: allocation failed");
+        }
+        std::copy(points.begin(), points.end(), result.points);
+        std::copy(groups.begin(), groups.end(), result.edgeGroups);
+        return result;
+    } catch (const Standard_Failure& e) {
+        throw std::runtime_error(std::string("wireframeByPosition: ") + e.what());
+    }
+}
+
+std::vector<uint32_t> OcctKernel::adjacencyByPosition(uint32_t id) {
+    try {
+        return sub_shape_identity::adjacency(get(id), "adjacencyByPosition");
+    } catch (const Standard_Failure& e) {
+        throw std::runtime_error(std::string("adjacencyByPosition: ") + e.what());
+    }
+}
+
+int OcctKernel::subShapePosition(uint32_t shapeId, uint32_t subId) {
+    try {
+        const auto& sub = get(subId);
+        if (sub.IsNull()) {
+            throw std::runtime_error("subShapePosition: the sub-shape is a null shape");
+        }
+        return sub_shape_identity::positionIn(sub_shape_identity::listOf(get(shapeId), sub.ShapeType()),
+                                              sub);
+    } catch (const Standard_Failure& e) {
+        throw std::runtime_error(std::string("subShapePosition: ") + e.what());
+    }
+}
+
+std::vector<uint32_t> OcctKernel::translateWithPositions(uint32_t id, double dx, double dy, double dz) {
+    try {
+        const auto& shape = get(id);
+        gp_Trsf trsf;
+        trsf.SetTranslation(gp_Vec(dx, dy, dz));
+        BRepBuilderAPI_Transform maker(shape, trsf, true);
+        BatchScope result(*this, 1);
+        const uint32_t resultId = result.add(maker.Shape());
+        std::vector<uint32_t> answer = sub_shape_identity::movedPositions(
+            maker, resultId, shape, maker.Shape(), "translateWithPositions");
+        result.take();
+        return answer;
+    } catch (const Standard_Failure& e) {
+        throw std::runtime_error(std::string("translateWithPositions: ") + e.what());
+    }
+}
+
+std::vector<uint32_t> OcctKernel::rotateWithPositions(uint32_t id, double px, double py, double pz, double dx, double dy, double dz, double angleRad) {
+    try {
+        const auto& shape = get(id);
+        gp_Trsf trsf;
+        trsf.SetRotation(gp_Ax1(gp_Pnt(px, py, pz), gp_Dir(dx, dy, dz)), angleRad);
+        BRepBuilderAPI_Transform maker(shape, trsf, true);
+        BatchScope result(*this, 1);
+        const uint32_t resultId = result.add(maker.Shape());
+        std::vector<uint32_t> answer = sub_shape_identity::movedPositions(
+            maker, resultId, shape, maker.Shape(), "rotateWithPositions");
+        result.take();
+        return answer;
+    } catch (const Standard_Failure& e) {
+        throw std::runtime_error(std::string("rotateWithPositions: ") + e.what());
+    }
+}
+
+std::vector<uint32_t> OcctKernel::mirrorWithPositions(uint32_t id, double px, double py, double pz, double nx, double ny, double nz) {
+    try {
+        const auto& shape = get(id);
+        gp_Trsf trsf;
+        trsf.SetMirror(gp_Ax2(gp_Pnt(px, py, pz), gp_Dir(nx, ny, nz)));
+        BRepBuilderAPI_Transform maker(shape, trsf, true);
+        BatchScope result(*this, 1);
+        const uint32_t resultId = result.add(maker.Shape());
+        std::vector<uint32_t> answer = sub_shape_identity::movedPositions(
+            maker, resultId, shape, maker.Shape(), "mirrorWithPositions");
+        result.take();
+        return answer;
+    } catch (const Standard_Failure& e) {
+        throw std::runtime_error(std::string("mirrorWithPositions: ") + e.what());
+    }
+}
+
+std::vector<uint32_t> OcctKernel::transformWithPositions(uint32_t id, std::vector<double> matrix) {
+    try {
+        if (matrix.size() != 12) {
+            throw std::runtime_error("transformWithPositions: matrix must have 12 elements (3x4)");
+        }
+        const auto& shape = get(id);
+        gp_Trsf trsf;
+        trsf.SetValues(matrix[0], matrix[1], matrix[2], matrix[3], matrix[4], matrix[5], matrix[6],
+                       matrix[7], matrix[8], matrix[9], matrix[10], matrix[11]);
+        BRepBuilderAPI_Transform maker(shape, trsf, true);
+        BatchScope result(*this, 1);
+        const uint32_t resultId = result.add(maker.Shape());
+        std::vector<uint32_t> answer = sub_shape_identity::movedPositions(
+            maker, resultId, shape, maker.Shape(), "transformWithPositions");
+        result.take();
+        return answer;
+    } catch (const Standard_Failure& e) {
+        throw std::runtime_error(std::string("transformWithPositions: ") + e.what());
+    }
 }

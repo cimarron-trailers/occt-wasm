@@ -7,16 +7,17 @@ use anyhow::{Context, Result};
 
 use super::config;
 use super::emitter;
+use super::fork;
 use super::rust_emitter;
-use super::types::MethodKind;
+use super::types::{MethodKind, MethodSpec};
 use super::wasi_emitter;
 
 use crate::util::project_root;
 
 /// Run the facade code generator.
 ///
-/// Reads method specs from `config`, emits C++ via `emitter`, and writes
-/// the output to `facade/generated/kernel.cpp`, `bindings.cpp`,
+/// Reads method specs from `config`, then the fork's from `fork`, emits C++ via
+/// `emitter`, and writes the output to `facade/generated/kernel.cpp`, `bindings.cpp`,
 /// `wasi_exports.cpp`, and `crate/src/kernel_generated.rs`.
 pub fn run() -> Result<()> {
     let root = project_root()?;
@@ -60,9 +61,29 @@ pub fn run() -> Result<()> {
         );
     }
 
+    // The fork's list (`fork.rs`), read after upstream's. It is validated with
+    // upstream's, so no name repeats across the two, and emitted into the Embind
+    // build alone: the crate embeds a committed `occt-wasm.wasm.br` that the fork
+    // never rebuilds, and it binds every export when it starts, so a method the
+    // blob lacks would stop the crate starting at all.
+    let fork_methods = fork::target_methods();
+    let both: Vec<MethodSpec> = all_methods.iter().chain(fork_methods).copied().collect();
+    config::validate(&both).context("fork method spec validation failed")?;
+    let embind: Vec<&MethodSpec> = generable
+        .iter()
+        .copied()
+        .chain(fork_methods.iter().filter(|m| m.kind != MethodKind::Skip))
+        .collect();
+    let fork_names: Vec<&str> = fork_methods.iter().map(|m| m.name).collect();
+    eprintln!(
+        "Codegen: {} fork methods (fork.rs), npm-only: {}",
+        fork_names.len(),
+        fork_names.join(", ")
+    );
+
     // Emit C++ files (Embind target)
-    let kernel_cpp = emitter::emit_kernel(&generable);
-    let bindings_cpp = emitter::emit_bindings(&generable);
+    let kernel_cpp = emitter::emit_kernel(&embind);
+    let bindings_cpp = emitter::emit_bindings(&embind);
 
     let kernel_path = facade_out.join("kernel.cpp");
     let bindings_path = facade_out.join("bindings.cpp");

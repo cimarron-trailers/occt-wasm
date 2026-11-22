@@ -200,10 +200,22 @@ TopoDS_Shape OcctKernel::normalizeSolidOrientation(const TopoDS_Shape& shape) {
     return shape;
 }
 
-// Shared mesh builder for tessellate() and tessellateRelative(). `relative`
-// selects per-edge size-relative deflection vs. absolute.
+// Shared mesh builder for tessellate() and tessellateRelative(), naming each face
+// group by its face's hash.
 MeshData OcctKernel::buildMeshData(const TopoDS_Shape& shape, double linearDeflection,
                                    double angularDeflection, bool relative) {
+    return buildMeshData(shape, linearDeflection, angularDeflection, relative,
+                         [](const TopoDS_Face& face) {
+                             return static_cast<int>(TopTools_ShapeMapHasher{}(face) % 2147483647);
+                         });
+}
+
+// The one mesher: tessellate(), tessellateRelative() and meshShapeByPosition()
+// (the fork's) all mesh here, differing only in what names a face group.
+// `relative` selects per-edge size-relative deflection vs. absolute.
+MeshData OcctKernel::buildMeshData(const TopoDS_Shape& shape, double linearDeflection,
+                                   double angularDeflection, bool relative,
+                                   const FaceGroupName& groupName) {
     BRepMesh_IncrementalMesh mesher(shape, linearDeflection, relative, angularDeflection, false);
     if (!mesher.IsDone()) {
         throw std::runtime_error("tessellate: meshing failed");
@@ -346,10 +358,9 @@ MeshData OcctKernel::buildMeshData(const TopoDS_Shape& shape, double linearDefle
         }
 
         int faceTriStart = triOffset - nbTri * 3;
-        int faceHash = static_cast<int>(TopTools_ShapeMapHasher{}(face) % 2147483647);
         result.faceGroups[faceGroupIdx + 0] = faceTriStart;
         result.faceGroups[faceGroupIdx + 1] = nbTri * 3;
-        result.faceGroups[faceGroupIdx + 2] = faceHash;
+        result.faceGroups[faceGroupIdx + 2] = groupName(face);
         faceGroupIdx += 3;
 
         vertexOffset += nbNodes;

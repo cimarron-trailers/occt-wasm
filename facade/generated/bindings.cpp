@@ -356,5 +356,19 @@ EMSCRIPTEN_BINDINGS(occt_wasm) {
         .function("freeBytes", &OcctKernel::freeBytes)
         .function("vectorF64FromHeap", &OcctKernel::vectorF64FromHeap)
         .function("vectorU32FromHeap", &OcctKernel::vectorU32FromHeap)
-        .function("vectorI32FromHeap", &OcctKernel::vectorI32FromHeap);
+        .function("vectorI32FromHeap", &OcctKernel::vectorI32FromHeap)
+
+        // identity
+        .function("cutWithPositionHistory", &OcctKernel::cutWithPositionHistory)
+        .function("fuseWithPositionHistory", &OcctKernel::fuseWithPositionHistory)
+        .function("intersectWithPositionHistory", &OcctKernel::intersectWithPositionHistory)
+        .function("mirrorWithPositionHistory", &OcctKernel::mirrorWithPositionHistory)
+        .function("meshShapeByPosition", &OcctKernel::meshShapeByPosition)
+        .function("wireframeByPosition", &OcctKernel::wireframeByPosition)
+        .function("adjacencyByPosition", &OcctKernel::adjacencyByPosition)
+        .function("subShapePosition", &OcctKernel::subShapePosition)
+        .function("translateWithPositions", &OcctKernel::translateWithPositions)
+        .function("rotateWithPositions", &OcctKernel::rotateWithPositions)
+        .function("mirrorWithPositions", &OcctKernel::mirrorWithPositions)
+        .function("transformWithPositions", &OcctKernel::transformWithPositions);
 }
