@@ -547,6 +547,14 @@ pub fn emit_wasi_exports(methods: &[&MethodSpec]) -> String {
         buf,
         "int32_t occt_get_mesh_face_groups_len() {{ return g_mesh_buf.faceGroupCount; }}"
     );
+    let _ = writeln!(
+        buf,
+        "const int32_t* occt_get_mesh_face_positions() {{ return g_mesh_buf.facePositions; }}"
+    );
+    let _ = writeln!(
+        buf,
+        "int32_t occt_get_mesh_face_positions_len() {{ return g_mesh_buf.facePositionCount; }}"
+    );
     let _ = writeln!(buf);
 
     // MeshBatch result accessors
@@ -602,6 +610,14 @@ pub fn emit_wasi_exports(methods: &[&MethodSpec]) -> String {
     let _ = writeln!(
         buf,
         "int32_t occt_get_edge_groups_len() {{ return g_edge_buf.edgeGroupCount; }}"
+    );
+    let _ = writeln!(
+        buf,
+        "const int32_t* occt_get_edge_positions() {{ return g_edge_buf.edgePositions; }}"
+    );
+    let _ = writeln!(
+        buf,
+        "int32_t occt_get_edge_positions_len() {{ return g_edge_buf.edgePositionCount; }}"
     );
     let _ = writeln!(buf);
 
@@ -784,6 +800,8 @@ pub fn emit_wasi_exports(methods: &[&MethodSpec]) -> String {
         ("first_shape_indexed", "firstShapeIndexed"),
         ("last_shape_indexed", "lastShapeIndexed"),
         ("spine_generated_indexed", "spineGeneratedIndexed"),
+        ("kept_indexed", "keptIndexed"),
+        ("edge_kept_indexed", "edgeKeptIndexed"),
     ] {
         let _ = writeln!(
             buf,

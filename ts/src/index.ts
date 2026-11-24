@@ -54,7 +54,9 @@ export {
     type NurbsSurfaceInput,
     type OcctModuleFactory,
     type ShapeQueryResult,
+    type PartPositions,
     type PointClassification,
+    type PositionAdjacency,
     type ProjectionData,
     type ShapeHandle,
     type ShapeOrientation,
@@ -126,7 +128,9 @@ import type {
     NurbsCurveData,
     NurbsSurfaceData,
     NurbsSurfaceInput,
+    PartPositions,
     PointClassification,
+    PositionAdjacency,
     ProjectionData,
     ShapeHandle,
     ShapeQueryResult,
@@ -1575,6 +1579,64 @@ export class OcctKernel {
         });
     }
 
+    /**
+     * Which faces, edges and vertices of a shape meet, each named by its position
+     * in {@link getSubShapes} order. {@link edgeToFaceMap} answers the edge-to-face
+     * part by hash, where two sub-shapes can share one.
+     */
+    adjacencyByPosition(shape: ShapeHandle): PositionAdjacency {
+        return wrap("adjacencyByPosition", () => {
+            const flat = this.#drainVector(this.#raw.adjacencyByPosition(shape), Int32Array);
+            let at = 3;
+            const lists = (count: number): number[][] =>
+                Array.from({ length: count }, () => {
+                    const n = flat[at]!;
+                    const list = flat.slice(at + 1, at + 1 + n);
+                    at += 1 + n;
+                    return list;
+                });
+            const [faces, edges] = [flat[0]!, flat[1]!];
+            const faceEdges = lists(faces);
+            const faceVertices = lists(faces);
+            const edgeFaces = lists(edges);
+            return { faceEdges, faceVertices, edgeFaces };
+        });
+    }
+
+    /**
+     * `sub`'s position among `shape`'s sub-shapes of its kind: the `i` for which
+     * `isSame(getSubShapes(shape, kind)[i], sub)`. Null where `shape` does not
+     * hold it, as for a copy of one of its sub-shapes.
+     */
+    subShapePosition(shape: ShapeHandle, sub: ShapeHandle): number | null {
+        return wrap("subShapePosition", () => {
+            const at = this.#raw.subShapePosition(shape, sub);
+            return at < 0 ? null : at;
+        });
+    }
+
+    /**
+     * Where every face, edge and vertex of `part` sits in `shape`, by position, in
+     * one call: a piece of a result mapped into the result, with no handle per
+     * sub-shape. -1 marks a sub-shape of `part` that `shape` does not hold.
+     */
+    subShapePositionsOf(shape: ShapeHandle, part: ShapeHandle): PartPositions {
+        return wrap("subShapePositionsOf", () => {
+            const flat = this.#drainVector(this.#raw.subShapePositionsOf(shape, part), Int32Array);
+            let at = 0;
+            const next = (): number[] => {
+                const n = flat[at]!;
+                const list = flat.slice(at + 1, at + 1 + n);
+                at += 1 + n;
+                return list;
+            };
+            const faces = next();
+            const edges = next();
+            const vertices = next();
+            return { faces, edges, vertices };
+        });
+    }
+
     // =======================================================================
     // Tessellation
     // =======================================================================
@@ -1618,7 +1680,13 @@ export class OcctKernel {
                         raw.getEdgeGroupsPtr() + raw.edgeGroupCount * 4,
                     ),
                 );
-                return { points, edgeGroups, pointCount: raw.pointCount, edgeCount };
+                const edgePositions = new Int32Array(
+                    this.#module.HEAP32.buffer.slice(
+                        raw.getEdgePositionsPtr(),
+                        raw.getEdgePositionsPtr() + raw.edgePositionCount * 4,
+                    ),
+                );
+                return { points, edgeGroups, edgePositions, pointCount: raw.pointCount, edgeCount };
             } finally {
                 raw.delete();
             }
@@ -2881,6 +2949,15 @@ export class OcctKernel {
         return this.#raw.getShapeCount();
     }
 
+    /**
+     * How many stored shapes hold a topology index: the per-shape sub-shape lists
+     * that every position answer reads, built on first use and freed with the
+     * shape. For tests and diagnostics, as {@link shapeCount} is for the arena.
+     */
+    get topologyIndexCount(): number {
+        return this.#raw.topologyIndexCount();
+    }
+
     // =======================================================================
     // Debugging
     // =======================================================================
@@ -3197,6 +3274,12 @@ export class OcctKernel {
                         raw.getFaceGroupsPtr() + raw.faceGroupCount * 4,
                     ),
                 );
+                mesh.facePositions = new Int32Array(
+                    this.#module.HEAP32.buffer.slice(
+                        raw.getFacePositionsPtr(),
+                        raw.getFacePositionsPtr() + raw.facePositionCount * 4,
+                    ),
+                );
                 mesh.faceCount = raw.faceGroupCount / 3;
             }
             return mesh;
@@ -3272,6 +3355,8 @@ export class OcctKernel {
         const firstShapeIndexed = this.#drainVector(raw.firstShapeIndexed, Int32Array);
         const lastShapeIndexed = this.#drainVector(raw.lastShapeIndexed, Int32Array);
         const spineGeneratedIndexed = this.#drainVector(raw.spineGeneratedIndexed, Int32Array);
+        const keptIndexed = this.#drainVector(raw.keptIndexed, Int32Array);
+        const edgeKeptIndexed = this.#drainVector(raw.edgeKeptIndexed, Int32Array);
         return {
             result: handle(raw.resultId),
             modified,
@@ -3294,6 +3379,8 @@ export class OcctKernel {
             firstShapeIndexed,
             lastShapeIndexed,
             spineGeneratedIndexed,
+            keptIndexed,
+            edgeKeptIndexed,
         };
     }
 }

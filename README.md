@@ -409,8 +409,8 @@ To generate the full docs locally, run `cd ts && npm run docs` (TypeDoc output).
 | **Sweeps**       | Pipe, loft, sweep, oriented sweep (fixed/Frenet/up-axis/auxiliary), draft prism, extrusion laws                |
 | **Construction** | Vertices, edges (line/arc/circle/ellipse/bezier/helix), wires, faces, solids, compounds, sewing                |
 | **Transforms**   | Translate, rotate, scale, mirror, align to bounding box, 3x4 matrix, linear/circular patterns                  |
-| **Topology**     | Shape type queries, type predicates, sub-shape extraction, adjacency, hash codes                               |
-| **Tessellation** | Triangle meshes (absolute or relative deflection), wireframe polylines (curve-sampled or mesh-aligned), per-face groups, batched meshing |
+| **Topology**     | Shape type queries, type predicates, sub-shape extraction and positions, adjacency (by hash or position), hash codes |
+| **Tessellation** | Triangle meshes (absolute or relative deflection), wireframe polylines (curve-sampled or mesh-aligned), per-face groups (by hash or position), batched meshing |
 | **I/O**          | STEP (choice of length unit and AP203/AP214/AP242 protocol), STL (ASCII + binary), BREP (text + binary) import/export |
 | **Query**        | Bounding box, volume, surface area, length, center of mass, inertia tensor, point-in-solid, curvature          |
 | **Surfaces**     | Type, exact parameters, normal, UV bounds, point classification, B-spline construction                         |

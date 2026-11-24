@@ -486,7 +486,7 @@ EvolutionData evo;
 evo.resultId = store(result);
 if (hashUpperBound > 0) {
     std::unordered_set<int> tracked(inputFaceHashes.begin(), inputFaceHashes.end());
-    SubShapePositions positions(result);
+    TopologyIndex& positions = topology(evo.resultId);
     for (const TopoDS_Shape& s : args) appendEvolution(evo, *op, s, positions, tracked, hashUpperBound);
     for (const TopoDS_Shape& s : tools) appendEvolution(evo, *op, s, positions, tracked, hashUpperBound);
 }
@@ -2821,9 +2821,7 @@ auto parseType = [](const std::string& t) -> TopAbs_ShapeEnum {
     if (t == \"compound\") return TopAbs_COMPOUND;
     throw std::runtime_error(\"Unknown shape type: \" + t);
 };
-TopAbs_ShapeEnum toExplore = parseType(shapeType);
-NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> map;
-TopExp::MapShapes(get(id), toExplore, map);
+const TopologyIndex::Map& map = topology(id).of(parseType(shapeType));
 BatchScope result(*this, static_cast<size_t>(map.Extent()));
 for (int i = 1; i <= map.Extent(); i++) {
     result.add(map.FindKey(i));
@@ -2854,9 +2852,7 @@ auto parseType = [](const std::string& t) -> TopAbs_ShapeEnum {
     if (t == \"compound\") return TopAbs_COMPOUND;
     throw std::runtime_error(\"Unknown shape type: \" + t);
 };
-NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> map;
-TopExp::MapShapes(get(id), parseType(shapeType), map);
-return map.Extent();",
+return topology(id).count(parseType(shapeType));",
         includes: &[
             "TopAbs_ShapeEnum.hxx", "TopExp.hxx",
             "NCollection_IndexedMap.hxx", "TopTools_ShapeMapHasher.hxx",
@@ -2888,8 +2884,7 @@ auto parseType = [](const std::string& t) -> TopAbs_ShapeEnum {
     if (t == \"compound\") return TopAbs_COMPOUND;
     throw std::runtime_error(\"Unknown shape type: \" + t);
 };
-NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> map;
-TopExp::MapShapes(get(id), parseType(shapeType), map);
+const TopologyIndex::Map& map = topology(id).of(parseType(shapeType));
 std::vector<int> result;
 result.reserve(map.Extent());
 for (int i = 1; i <= map.Extent(); i++) {
@@ -3035,6 +3030,79 @@ for (TopExp_Explorer exE(shape, TopAbs_EDGE); exE.More(); exE.Next()) {
 }
 return result;",
         includes: &["TopExp_Explorer.hxx", "TopTools_ShapeMapHasher.hxx"],
+        category: "topology",
+        return_type: ReturnType::VectorInt,
+    },
+    MethodSpec {
+        name: "adjacencyByPosition",
+        kind: MethodKind::CustomBody,
+        params: &[FacadeParam::ShapeId("id")],
+        occt_class: "",
+        ctor_args: "",
+        // The shape's adjacency, every sub-shape by its position (getSubShapes
+        // order), so two that share a hash stay apart:
+        //   [faceCount, edgeCount, vertexCount,
+        //    for each face: n, its n edges,
+        //    for each face: n, its n vertices,
+        //    for each edge: n, the n faces it bounds]
+        setup_code: "\
+TopologyIndex& index = topology(id);
+const TopologyIndex::Adjacency& adjacency = index.adjacency();
+std::vector<int> result{index.count(TopAbs_FACE), index.count(TopAbs_EDGE),
+                        index.count(TopAbs_VERTEX)};
+for (const auto* lists : {&adjacency.faceEdges, &adjacency.faceVertices, &adjacency.edgeFaces}) {
+    for (const std::vector<int>& list : *lists) {
+        result.push_back(static_cast<int>(list.size()));
+        result.insert(result.end(), list.begin(), list.end());
+    }
+}
+return result;",
+        includes: &[],
+        category: "topology",
+        return_type: ReturnType::VectorInt,
+    },
+    MethodSpec {
+        name: "subShapePosition",
+        kind: MethodKind::CustomBody,
+        params: &[FacadeParam::ShapeId("shapeId"), FacadeParam::ShapeId("subId")],
+        occt_class: "",
+        ctor_args: "",
+        // `sub`'s position among `shape`'s sub-shapes of its kind, or -1 where the
+        // shape does not hold it. One lookup in the shape's index.
+        setup_code: "\
+const auto& sub = get(subId);
+if (sub.IsNull()) {
+    throw std::runtime_error(\"subShapePosition: the sub-shape is null\");
+}
+return topology(shapeId).positionOf(sub);",
+        includes: &[],
+        category: "topology",
+        return_type: ReturnType::Int,
+    },
+    MethodSpec {
+        name: "subShapePositionsOf",
+        kind: MethodKind::CustomBody,
+        params: &[FacadeParam::ShapeId("shapeId"), FacadeParam::ShapeId("partId")],
+        occt_class: "",
+        ctor_args: "",
+        // Where each face, edge and vertex of `part` sits in `shape`, in one call:
+        //   [faceCount, each of part's faces' position in shape (or -1),
+        //    edgeCount, ..., vertexCount, ...]
+        // part's sub-shapes in their own position order. A piece of a result, say,
+        // is mapped into the result without a handle per face.
+        setup_code: "\
+TopologyIndex& shape = topology(shapeId);
+TopologyIndex& part = topology(partId);
+std::vector<int> result;
+for (TopAbs_ShapeEnum kind : {TopAbs_FACE, TopAbs_EDGE, TopAbs_VERTEX}) {
+    const TopologyIndex::Map& subs = part.of(kind);
+    result.push_back(subs.Extent());
+    for (int i = 1; i <= subs.Extent(); i++) {
+        result.push_back(shape.positionOf(subs.FindKey(i)));
+    }
+}
+return result;",
+        includes: &[],
         category: "topology",
         return_type: ReturnType::VectorInt,
     },
@@ -5332,8 +5400,8 @@ if (!maker.IsDone()) {
 BatchScope batch(*this, 1);
 const TopoDS_Shape result = normalizeSolidOrientation(maker.Shape());
 uint32_t resultId = batch.add(result);
-EvolutionData evo = buildEvolution(maker, resultId, get(resultId), {shape}, inputFaceHashes, hashUpperBound);
-appendSweepCaps(evo, maker, result, hashUpperBound);
+EvolutionData evo = buildEvolution(maker, resultId, topology(resultId), {shape}, inputFaceHashes, hashUpperBound);
+appendSweepCaps(evo, maker, topology(evo.resultId), hashUpperBound);
 batch.take();
 return evo;",
         includes: &["BRepPrimAPI_MakePrism.hxx", "gp_Vec.hxx", "TopExp_Explorer.hxx", "TopTools_ShapeMapHasher.hxx"],
@@ -5363,8 +5431,8 @@ BatchScope batch(*this, 1);
 const TopoDS_Shape result = normalizeSolidOrientation(maker.Shape());
 uint32_t resultId = batch.add(result);
 RevolHistory history(maker, result);
-EvolutionData evo = buildEvolution(history, resultId, get(resultId), {shape}, inputFaceHashes, hashUpperBound);
-appendSweepCaps(evo, maker, result, hashUpperBound);
+EvolutionData evo = buildEvolution(history, resultId, topology(resultId), {shape}, inputFaceHashes, hashUpperBound);
+appendSweepCaps(evo, maker, topology(evo.resultId), hashUpperBound);
 batch.take();
 return evo;",
         includes: &[
@@ -5396,9 +5464,9 @@ BatchScope batch(*this, 1);
 const TopoDS_Shape result = maker.Shape();
 uint32_t resultId = batch.add(result);
 PipeHistory history(maker, spine);
-EvolutionData evo = buildEvolution(history, resultId, get(resultId), {profile}, inputFaceHashes, hashUpperBound);
-appendSweepCaps(evo, maker, result, hashUpperBound);
-appendSpineGenerated(evo, spine, profile, result, hashUpperBound,
+EvolutionData evo = buildEvolution(history, resultId, topology(resultId), {profile}, inputFaceHashes, hashUpperBound);
+appendSweepCaps(evo, maker, topology(evo.resultId), hashUpperBound);
+appendSpineGenerated(evo, spine, profile, topology(evo.resultId), hashUpperBound,
     [&maker](const TopoDS_Shape& spineEdge, const TopoDS_Shape& profileEdge) {
         std::vector<TopoDS_Shape> faces;
         const TopoDS_Shape face = maker.Generated(spineEdge, profileEdge);
@@ -5475,12 +5543,12 @@ maker.MakeSolid();
 BatchScope batch(*this, 1);
 const TopoDS_Shape result = maker.Shape();
 uint32_t resultId = batch.add(result);
-EvolutionData evo = buildEvolution(maker, resultId, get(resultId), {profile}, inputFaceHashes, hashUpperBound);
-appendSweepCaps(evo, maker, result, hashUpperBound);
+EvolutionData evo = buildEvolution(maker, resultId, topology(resultId), {profile}, inputFaceHashes, hashUpperBound);
+appendSweepCaps(evo, maker, topology(evo.resultId), hashUpperBound);
 // BRepFill_PipeShell binds a spine edge to the faces swept along it as well as a
 // profile edge to the faces it swept, so a pair's faces are the ones in both lists.
 // Generated answers through one list it reuses, hence the copies.
-appendSpineGenerated(evo, spine, profile, result, hashUpperBound,
+appendSpineGenerated(evo, spine, profile, topology(evo.resultId), hashUpperBound,
     [&maker](const TopoDS_Shape& spineEdge, const TopoDS_Shape& profileEdge) {
         std::vector<TopoDS_Shape> faces;
         const auto alongSpine = maker.Generated(spineEdge);
@@ -5545,13 +5613,13 @@ const TopoDS_Shape result = straight.Shape();
 EvolutionData evo;
 evo.resultId = batch.add(result);
 std::unordered_set<int> tracked(inputFaceHashes.begin(), inputFaceHashes.end());
-SubShapePositions positions(result);
+TopologyIndex& positions = topology(evo.resultId);
 // A closed loft's first wire is reported once.
 std::unordered_set<uint32_t> seen;
 for (uint32_t wid : wireIds) {
     if (seen.insert(wid).second) appendEvolution(evo, straight, get(wid), positions, tracked, hashUpperBound);
 }
-appendSweepCaps(evo, straight, result, hashUpperBound);
+appendSweepCaps(evo, straight, topology(evo.resultId), hashUpperBound);
 batch.take();
 return evo;",
         includes: &["BRepOffsetAPI_ThruSections.hxx", "TopoDS.hxx", "TopExp_Explorer.hxx", "TopTools_ShapeMapHasher.hxx"],
@@ -5574,7 +5642,7 @@ const TopoDS_Shape result = unifyCopy(shape, {}, &history);
 BatchScope batch(*this, 1);
 uint32_t resultId = batch.add(result);
 HistoryMaker maker(history);
-EvolutionData evo = buildEvolution(maker, resultId, get(resultId), {shape}, inputFaceHashes, hashUpperBound);
+EvolutionData evo = buildEvolution(maker, resultId, topology(resultId), {shape}, inputFaceHashes, hashUpperBound);
 batch.take();
 return evo;",
         includes: &[
@@ -5604,7 +5672,7 @@ trsf.SetValues(matrix[0], matrix[1], matrix[2], matrix[3], matrix[4], matrix[5],
 BRepBuilderAPI_Transform maker(shape, trsf, true);
 BatchScope batch(*this, 1);
 uint32_t resultId = batch.add(maker.Shape());
-EvolutionData evo = buildEvolution(maker, resultId, get(resultId), {shape}, inputFaceHashes, hashUpperBound);
+EvolutionData evo = buildEvolution(maker, resultId, topology(resultId), {shape}, inputFaceHashes, hashUpperBound);
 batch.take();
 return evo;",
         includes: &["BRepBuilderAPI_Transform.hxx", "gp_Trsf.hxx", "TopExp_Explorer.hxx", "TopTools_ShapeMapHasher.hxx"],
@@ -5627,7 +5695,7 @@ gp_Trsf trsf;
 trsf.SetTranslation(gp_Vec(dx, dy, dz));
 BRepBuilderAPI_Transform maker(shape, trsf, true);
 uint32_t resultId = store(maker.Shape());
-return buildEvolution(maker, resultId, get(resultId), {shape}, inputFaceHashes, hashUpperBound);",
+return buildEvolution(maker, resultId, topology(resultId), {shape}, inputFaceHashes, hashUpperBound);",
         includes: &["BRepBuilderAPI_Transform.hxx", "gp_Trsf.hxx", "gp_Vec.hxx", "TopExp_Explorer.hxx", "TopTools_ShapeMapHasher.hxx"],
         category: "evolution",
         return_type: ReturnType::EvolutionData,
@@ -5651,7 +5719,7 @@ if (!op.IsDone() || op.HasErrors()) {
 }
 uint32_t resultId = store(op.Shape());
 
-EvolutionData evo = buildEvolution(op, resultId, get(resultId), {shapeA, shapeB}, inputFaceHashes,
+EvolutionData evo = buildEvolution(op, resultId, topology(resultId), {shapeA, shapeB}, inputFaceHashes,
                                    hashUpperBound);
 return evo;",
         includes: &["BRepAlgoAPI_Fuse.hxx", "TopExp_Explorer.hxx", "TopTools_ShapeMapHasher.hxx"],
@@ -5677,7 +5745,7 @@ if (!op.IsDone() || op.HasErrors()) {
 }
 uint32_t resultId = store(op.Shape());
 
-EvolutionData evo = buildEvolution(op, resultId, get(resultId), {shapeA, shapeB}, inputFaceHashes,
+EvolutionData evo = buildEvolution(op, resultId, topology(resultId), {shapeA, shapeB}, inputFaceHashes,
                                    hashUpperBound);
 return evo;",
         includes: &["BRepAlgoAPI_Cut.hxx", "TopExp_Explorer.hxx", "TopTools_ShapeMapHasher.hxx"],
@@ -5709,7 +5777,7 @@ if (!maker.IsDone()) {
 }
 BatchScope result(*this, 1);
 uint32_t resultId = result.add(validateFilletResult(unwrapSingletonSolid(maker.Shape()), \"filletWithHistory\", false));
-EvolutionData evo = buildEvolution(maker, resultId, get(resultId), {solid}, inputFaceHashes, hashUpperBound);
+EvolutionData evo = buildEvolution(maker, resultId, topology(resultId), {solid}, inputFaceHashes, hashUpperBound);
 result.take();
 return evo;",
         includes: &["BRepFilletAPI_MakeFillet.hxx", "TopoDS.hxx", "TopExp_Explorer.hxx", "TopTools_ShapeMapHasher.hxx"],
@@ -5734,7 +5802,7 @@ gp_Trsf trsf;
 trsf.SetRotation(gp_Ax1(gp_Pnt(px, py, pz), gp_Dir(dx, dy, dz)), angle);
 BRepBuilderAPI_Transform maker(shape, trsf, true);
 uint32_t resultId = store(maker.Shape());
-return buildEvolution(maker, resultId, get(resultId), {shape}, inputFaceHashes, hashUpperBound);",
+return buildEvolution(maker, resultId, topology(resultId), {shape}, inputFaceHashes, hashUpperBound);",
         includes: &["BRepBuilderAPI_Transform.hxx", "gp_Trsf.hxx", "gp_Ax1.hxx", "gp_Pnt.hxx", "gp_Dir.hxx", "TopExp_Explorer.hxx", "TopTools_ShapeMapHasher.hxx"],
         category: "evolution",
         return_type: ReturnType::EvolutionData,
@@ -5756,7 +5824,7 @@ gp_Trsf trsf;
 trsf.SetMirror(gp_Ax2(gp_Pnt(px, py, pz), gp_Dir(nx, ny, nz)));
 BRepBuilderAPI_Transform maker(shape, trsf, true);
 uint32_t resultId = store(maker.Shape());
-return buildEvolution(maker, resultId, get(resultId), {shape}, inputFaceHashes, hashUpperBound);",
+return buildEvolution(maker, resultId, topology(resultId), {shape}, inputFaceHashes, hashUpperBound);",
         includes: &["BRepBuilderAPI_Transform.hxx", "gp_Trsf.hxx", "gp_Ax2.hxx", "gp_Pnt.hxx", "gp_Dir.hxx", "TopExp_Explorer.hxx", "TopTools_ShapeMapHasher.hxx"],
         category: "evolution",
         return_type: ReturnType::EvolutionData,
@@ -5778,7 +5846,7 @@ gp_Trsf trsf;
 trsf.SetScale(gp_Pnt(cx, cy, cz), factor);
 BRepBuilderAPI_Transform maker(shape, trsf, true);
 uint32_t resultId = store(maker.Shape());
-return buildEvolution(maker, resultId, get(resultId), {shape}, inputFaceHashes, hashUpperBound);",
+return buildEvolution(maker, resultId, topology(resultId), {shape}, inputFaceHashes, hashUpperBound);",
         includes: &["BRepBuilderAPI_Transform.hxx", "gp_Trsf.hxx", "gp_Pnt.hxx", "TopExp_Explorer.hxx", "TopTools_ShapeMapHasher.hxx"],
         category: "evolution",
         return_type: ReturnType::EvolutionData,
@@ -5801,7 +5869,7 @@ if (!op.IsDone() || op.HasErrors()) {
     throw std::runtime_error(\"intersectWithHistory: operation failed\");
 }
 uint32_t resultId = store(op.Shape());
-EvolutionData evo = buildEvolution(op, resultId, get(resultId), {shapeA, shapeB}, inputFaceHashes,
+EvolutionData evo = buildEvolution(op, resultId, topology(resultId), {shapeA, shapeB}, inputFaceHashes,
                                    hashUpperBound);
 return evo;",
         includes: &["BRepAlgoAPI_Common.hxx", "TopExp_Explorer.hxx", "TopTools_ShapeMapHasher.hxx"],
@@ -5833,7 +5901,7 @@ if (!maker.IsDone()) {
 }
 BatchScope result(*this, 1);
 uint32_t resultId = result.add(validateFilletResult(unwrapSingletonSolid(maker.Shape()), \"chamferWithHistory\", false));
-EvolutionData evo = buildEvolution(maker, resultId, get(resultId), {solid}, inputFaceHashes, hashUpperBound);
+EvolutionData evo = buildEvolution(maker, resultId, topology(resultId), {solid}, inputFaceHashes, hashUpperBound);
 result.take();
 return evo;",
         includes: &["BRepFilletAPI_MakeChamfer.hxx", "TopoDS.hxx", "TopExp_Explorer.hxx", "TopTools_ShapeMapHasher.hxx"],
@@ -5874,7 +5942,7 @@ if (!maker.IsDone()) {
 }
 BatchScope result(*this, 1);
 uint32_t resultId = result.add(validateFilletResult(unwrapSingletonSolid(maker.Shape()), \"filletRadiiWithHistory\", false));
-EvolutionData evo = buildEvolution(maker, resultId, get(resultId), {solid}, inputFaceHashes, hashUpperBound);
+EvolutionData evo = buildEvolution(maker, resultId, topology(resultId), {solid}, inputFaceHashes, hashUpperBound);
 result.take();
 return evo;",
         includes: &["BRepFilletAPI_MakeFillet.hxx", "TopoDS.hxx", "TopExp_Explorer.hxx", "TopTools_ShapeMapHasher.hxx"],
@@ -5912,7 +5980,7 @@ if (!maker.IsDone()) {
 }
 BatchScope result(*this, 1);
 uint32_t resultId = result.add(validateFilletResult(unwrapSingletonSolid(maker.Shape()), \"chamferDistancesWithHistory\", false));
-EvolutionData evo = buildEvolution(maker, resultId, get(resultId), {solid}, inputFaceHashes, hashUpperBound);
+EvolutionData evo = buildEvolution(maker, resultId, topology(resultId), {solid}, inputFaceHashes, hashUpperBound);
 result.take();
 return evo;",
         includes: &["BRepFilletAPI_MakeChamfer.hxx", "TopoDS.hxx", "TopExp_Explorer.hxx", "TopTools_ShapeMapHasher.hxx"],
@@ -5954,7 +6022,7 @@ if (!maker.IsDone()) {
 }
 BatchScope result(*this, 1);
 uint32_t resultId = result.add(validateFilletResult(unwrapSingletonSolid(maker.Shape()), \"chamferDistAnglesWithHistory\", false));
-EvolutionData evo = buildEvolution(maker, resultId, get(resultId), {solid}, inputFaceHashes, hashUpperBound);
+EvolutionData evo = buildEvolution(maker, resultId, topology(resultId), {solid}, inputFaceHashes, hashUpperBound);
 result.take();
 return evo;",
         includes: &["BRepFilletAPI_MakeChamfer.hxx", "TopoDS.hxx", "TopExp_Explorer.hxx", "TopTools_ShapeMapHasher.hxx"],
@@ -6027,7 +6095,7 @@ if (!maker.IsDone()) {
 }
 BatchScope result(*this, 1);
 uint32_t resultId = result.add(maker.Shape());
-EvolutionData evo = buildEvolution(maker, resultId, get(resultId), {shape}, inputFaceHashes, hashUpperBound);
+EvolutionData evo = buildEvolution(maker, resultId, topology(resultId), {shape}, inputFaceHashes, hashUpperBound);
 result.take();
 return evo;",
         includes: &["BRepOffsetAPI_DraftAngle.hxx", "NCollection_IndexedMap.hxx", "TopExp.hxx", "TopTools_ShapeMapHasher.hxx", "TopoDS.hxx", "gp.hxx", "gp_Dir.hxx", "gp_Pln.hxx", "gp_Pnt.hxx", "gp_Vec.hxx", "TopExp_Explorer.hxx", "TopTools_ShapeMapHasher.hxx"],
@@ -6060,7 +6128,7 @@ if (!maker.IsDone()) {
 }
 BatchScope result(*this, 1);
 uint32_t resultId = result.add(maker.Shape());
-EvolutionData evo = buildEvolution(maker, resultId, get(resultId), {solid}, inputFaceHashes, hashUpperBound);
+EvolutionData evo = buildEvolution(maker, resultId, topology(resultId), {solid}, inputFaceHashes, hashUpperBound);
 result.take();
 return evo;",
         includes: &["BRepOffsetAPI_MakeThickSolid.hxx", "NCollection_List.hxx", "TopoDS.hxx", "TopExp_Explorer.hxx", "TopTools_ShapeMapHasher.hxx"],
@@ -6086,7 +6154,7 @@ if (!maker.IsDone()) {
     throw std::runtime_error(\"offsetWithHistory: operation failed\");
 }
 uint32_t resultId = store(maker.Shape());
-return buildEvolution(maker, resultId, get(resultId), {solid}, inputFaceHashes, hashUpperBound);",
+return buildEvolution(maker, resultId, topology(resultId), {solid}, inputFaceHashes, hashUpperBound);",
         includes: &["BRepOffsetAPI_MakeOffsetShape.hxx", "TopExp_Explorer.hxx", "TopTools_ShapeMapHasher.hxx"],
         category: "evolution",
         return_type: ReturnType::EvolutionData,
@@ -6120,7 +6188,7 @@ if (!maker.IsDone()) {
 }
 BatchScope result(*this, 1);
 uint32_t resultId = result.add(maker.Shape());
-EvolutionData evo = buildEvolution(maker, resultId, get(resultId), {solid}, inputFaceHashes, hashUpperBound);
+EvolutionData evo = buildEvolution(maker, resultId, topology(resultId), {solid}, inputFaceHashes, hashUpperBound);
 result.take();
 return evo;",
         includes: &[
@@ -6153,7 +6221,7 @@ if (!maker.IsDone()) {
 }
 BatchScope result(*this, 1);
 uint32_t resultId = result.add(maker.Shape());
-EvolutionData evo = buildEvolution(maker, resultId, get(resultId), {solid}, inputFaceHashes, hashUpperBound);
+EvolutionData evo = buildEvolution(maker, resultId, topology(resultId), {solid}, inputFaceHashes, hashUpperBound);
 result.take();
 return evo;",
         includes: &[
@@ -6201,7 +6269,7 @@ if (!maker.IsDone()) {
     throw std::runtime_error(\"thickenWithHistory: operation failed\");
 }
 uint32_t resultId = store(maker.Shape());
-return buildEvolution(maker, resultId, get(resultId), {shape}, inputFaceHashes, hashUpperBound);",
+return buildEvolution(maker, resultId, topology(resultId), {shape}, inputFaceHashes, hashUpperBound);",
         includes: &[
             "BRepOffset_MakeOffset.hxx", "BRepOffset_Mode.hxx",
             "BRepOffsetAPI_MakeThickSolid.hxx", "NCollection_List.hxx",
@@ -6221,7 +6289,7 @@ return buildEvolution(maker, resultId, get(resultId), {shape}, inputFaceHashes, 
         ],
         occt_class: "",
         ctor_args: "",
-        setup_code: "return buildMeshData(get(id), linearDeflection, angularDeflection, false);",
+        setup_code: "return buildMeshData(id, linearDeflection, angularDeflection, false);",
         includes: &[],
         category: "tessellate",
         return_type: ReturnType::MeshData,
@@ -6238,7 +6306,7 @@ return buildEvolution(maker, resultId, get(resultId), {shape}, inputFaceHashes, 
         ctor_args: "",
         // Scale-independent meshing: linearDeflection is interpreted relative to
         // each edge's length (OCCT isRelative).
-        setup_code: "return buildMeshData(get(id), linearDeflection, angularDeflection, true);",
+        setup_code: "return buildMeshData(id, linearDeflection, angularDeflection, true);",
         includes: &[],
         category: "tessellate",
         return_type: ReturnType::MeshData,
@@ -6435,7 +6503,6 @@ return result;",
         occt_class: "",
         ctor_args: "",
         setup_code: "\
-const auto& shape = get(id);
 // source 0 samples the analytic curve; 1 reads the polygon BRepMesh stored
 // on the edge so the polyline shares vertices with the face mesh, following
 // StdPrs_WFShape::addEdges: PolygonOnTriangulation, then Polygon3D, then the
@@ -6445,6 +6512,7 @@ const bool fromTriangulation = source == 1;
 struct EdgeSample {
     std::vector<gp_Pnt> pts;
     int hash;
+    int position;
 };
 std::vector<EdgeSample> edgeSamples;
 int totalPoints = 0;
@@ -6460,9 +6528,9 @@ auto appendNodes = [](std::vector<gp_Pnt>& pts, const TopLoc_Location& loc, int 
     }
 };
 
-// Use IndexedMap to avoid duplicate edges (shared between faces)
-NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> edgeMap;
-TopExp::MapShapes(shape, TopAbs_EDGE, edgeMap);
+// The shape's edges, each once (not once per face that uses it) and in position
+// order, so an edge this skips leaves the others' positions as they are.
+const TopologyIndex::Map& edgeMap = topology(id).of(TopAbs_EDGE);
 for (int ei = 1; ei <= edgeMap.Extent(); ei++) {
     const TopoDS_Edge& edge = TopoDS::Edge(edgeMap.FindKey(ei));
     if (BRep_Tool::Degenerated(edge)) {
@@ -6507,6 +6575,7 @@ for (int ei = 1; ei <= edgeMap.Extent(); ei++) {
         continue;
     }
     es.hash = static_cast<int>(TopTools_ShapeMapHasher{}(edge) % 2147483647);
+    es.position = ei - 1;
     totalPoints += static_cast<int>(es.pts.size());
     edgeSamples.push_back(std::move(es));
 }
@@ -6518,6 +6587,9 @@ int numEdges = static_cast<int>(edgeSamples.size());
 result.edgeGroupCount = numEdges * 3;
 result.edgeGroups =
     static_cast<int32_t*>(std::malloc(result.edgeGroupCount * sizeof(int32_t)));
+result.edgePositionCount = numEdges;
+result.edgePositions =
+    static_cast<int32_t*>(std::malloc(result.edgePositionCount * sizeof(int32_t)));
 if (!result.points && result.pointCount > 0) {
     throw std::runtime_error(\"wireframe: allocation failed\");
 }
@@ -6536,6 +6608,9 @@ for (const auto& es : edgeSamples) {
         result.edgeGroups[edgeIdx * 3] = edgeStart;
         result.edgeGroups[edgeIdx * 3 + 1] = offset - edgeStart;
         result.edgeGroups[edgeIdx * 3 + 2] = es.hash;
+    }
+    if (result.edgePositions) {
+        result.edgePositions[edgeIdx] = es.position;
     }
     edgeIdx++;
 }
@@ -6673,6 +6748,26 @@ for (auto it = arena_.begin(); it != arena_.end();) {
         occt_class: "",
         ctor_args: "",
         setup_code: "return static_cast<uint32_t>(arena_.size());",
+        includes: &[],
+        category: "kernel",
+        return_type: ReturnType::Uint32,
+    },
+    MethodSpec {
+        name: "topologyIndexCount",
+        kind: MethodKind::CustomBody,
+        params: &[],
+        occt_class: "",
+        ctor_args: "",
+        // How many stored shapes hold a topology index: for tests and diagnostics,
+        // as getShapeCount is for the arena.
+        setup_code: "\
+uint32_t count = 0;
+for (const auto& entry : arena_) {
+    if (entry.second.topology) {
+        count++;
+    }
+}
+return count;",
         includes: &[],
         category: "kernel",
         return_type: ReturnType::Uint32,

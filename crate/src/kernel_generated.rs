@@ -217,6 +217,9 @@ pub(crate) struct GeneratedFuncs {
     fn_shape_orientation: TypedFunc<(u32,), i32>,
     fn_iter_shapes: TypedFunc<(u32,), i32>,
     fn_edge_to_face_map: TypedFunc<(u32, i32), i32>,
+    fn_adjacency_by_position: TypedFunc<(u32,), i32>,
+    fn_sub_shape_position: TypedFunc<(u32, u32), i32>,
+    fn_sub_shape_positions_of: TypedFunc<(u32, u32), i32>,
     fn_downcast: TypedFunc<(u32, i32, i32), u32>,
     fn_adjacent_faces: TypedFunc<(u32, u32), i32>,
     fn_shared_edges: TypedFunc<(u32, u32), i32>,
@@ -355,6 +358,7 @@ pub(crate) struct GeneratedFuncs {
     fn_checkpoint: TypedFunc<(), u32>,
     fn_release_since: TypedFunc<(u32,), i32>,
     fn_get_shape_count: TypedFunc<(), u32>,
+    fn_topology_index_count: TypedFunc<(), u32>,
     fn_make_null_shape: TypedFunc<(), u32>,
     fn_xcaf_new_document: TypedFunc<(), u32>,
     fn_xcaf_close: TypedFunc<(u32,), i32>,
@@ -499,6 +503,12 @@ impl GeneratedFuncs {
             fn_shape_orientation: instance.get_typed_func(&mut store, "occt_shape_orientation")?,
             fn_iter_shapes: instance.get_typed_func(&mut store, "occt_iter_shapes")?,
             fn_edge_to_face_map: instance.get_typed_func(&mut store, "occt_edge_to_face_map")?,
+            fn_adjacency_by_position: instance
+                .get_typed_func(&mut store, "occt_adjacency_by_position")?,
+            fn_sub_shape_position: instance
+                .get_typed_func(&mut store, "occt_sub_shape_position")?,
+            fn_sub_shape_positions_of: instance
+                .get_typed_func(&mut store, "occt_sub_shape_positions_of")?,
             fn_downcast: instance.get_typed_func(&mut store, "occt_downcast")?,
             fn_adjacent_faces: instance.get_typed_func(&mut store, "occt_adjacent_faces")?,
             fn_shared_edges: instance.get_typed_func(&mut store, "occt_shared_edges")?,
@@ -655,6 +665,8 @@ impl GeneratedFuncs {
             fn_checkpoint: instance.get_typed_func(&mut store, "occt_checkpoint")?,
             fn_release_since: instance.get_typed_func(&mut store, "occt_release_since")?,
             fn_get_shape_count: instance.get_typed_func(&mut store, "occt_get_shape_count")?,
+            fn_topology_index_count: instance
+                .get_typed_func(&mut store, "occt_topology_index_count")?,
             fn_make_null_shape: instance.get_typed_func(&mut store, "occt_make_null_shape")?,
             fn_xcaf_new_document: instance.get_typed_func(&mut store, "occt_xcaf_new_document")?,
             fn_xcaf_close: instance.get_typed_func(&mut store, "occt_xcaf_close")?,
@@ -3230,6 +3242,45 @@ impl crate::kernel::OcctKernel {
         self.read_vec_i32_result()
     }
 
+    pub fn adjacency_by_position(&mut self, id: ShapeHandle) -> OcctResult<Vec<i32>> {
+        let len = self
+            .generated
+            .fn_adjacency_by_position
+            .call(&mut self.store, (id.0,))?;
+        if len < 0 {
+            return Err(self.read_last_error("adjacency_by_position"));
+        }
+        self.read_vec_i32_result()
+    }
+
+    pub fn sub_shape_position(
+        &mut self,
+        shape_id: ShapeHandle,
+        sub_id: ShapeHandle,
+    ) -> OcctResult<i32> {
+        let result = self
+            .generated
+            .fn_sub_shape_position
+            .call(&mut self.store, (shape_id.0, sub_id.0))?;
+        self.check_error("sub_shape_position")?;
+        Ok(result)
+    }
+
+    pub fn sub_shape_positions_of(
+        &mut self,
+        shape_id: ShapeHandle,
+        part_id: ShapeHandle,
+    ) -> OcctResult<Vec<i32>> {
+        let len = self
+            .generated
+            .fn_sub_shape_positions_of
+            .call(&mut self.store, (shape_id.0, part_id.0))?;
+        if len < 0 {
+            return Err(self.read_last_error("sub_shape_positions_of"));
+        }
+        self.read_vec_i32_result()
+    }
+
     pub fn downcast(&mut self, id: ShapeHandle, target_type: &str) -> OcctResult<ShapeHandle> {
         let target_type_ptr = self.write_bytes(target_type.as_bytes())?;
         let target_type_len = target_type.len() as u32;
@@ -5700,6 +5751,15 @@ impl crate::kernel::OcctKernel {
             .fn_get_shape_count
             .call(&mut self.store, ())?;
         self.check_error("get_shape_count")?;
+        Ok(result)
+    }
+
+    pub fn topology_index_count(&mut self) -> OcctResult<u32> {
+        let result = self
+            .generated
+            .fn_topology_index_count
+            .call(&mut self.store, ())?;
+        self.check_error("topology_index_count")?;
         Ok(result)
     }
 

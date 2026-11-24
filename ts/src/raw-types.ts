@@ -48,10 +48,12 @@ export interface RawMeshData {
     normalCount: number;
     indexCount: number;
     faceGroupCount: number;
+    facePositionCount: number;
     getPositionsPtr(): number;
     getNormalsPtr(): number;
     getIndicesPtr(): number;
     getFaceGroupsPtr(): number;
+    getFacePositionsPtr(): number;
     delete(): void;
 }
 
@@ -70,8 +72,10 @@ export interface RawMeshBatchData {
 export interface RawEdgeData {
     pointCount: number;
     edgeGroupCount: number;
+    edgePositionCount: number;
     getPointsPtr(): number;
     getEdgeGroupsPtr(): number;
+    getEdgePositionsPtr(): number;
     delete(): void;
 }
 
@@ -97,6 +101,8 @@ export interface RawEvolutionData {
     firstShapeIndexed: EmbindVectorI32;
     lastShapeIndexed: EmbindVectorI32;
     spineGeneratedIndexed: EmbindVectorI32;
+    keptIndexed: EmbindVectorI32;
+    edgeKeptIndexed: EmbindVectorI32;
 }
 
 export interface RawProjectionData {
@@ -198,6 +204,7 @@ export interface OcctRawKernel {
     release(id: number): void;
     releaseAll(): void;
     getShapeCount(): number;
+    topologyIndexCount(): number;
     checkpoint(): number;
     releaseSince(mark: number): void;
 
@@ -360,6 +367,9 @@ export interface OcctRawKernel {
     adjacentFaces(shapeId: number, faceId: number): EmbindVectorU32;
     iterShapes(id: number): EmbindVectorU32;
     edgeToFaceMap(id: number, hashUpperBound: number): EmbindVectorI32;
+    adjacencyByPosition(id: number): EmbindVectorI32;
+    subShapePosition(shapeId: number, subId: number): number;
+    subShapePositionsOf(shapeId: number, partId: number): EmbindVectorI32;
 
     // Tessellation
     tessellate(id: number, linDefl: number, angDefl: number): RawMeshData;

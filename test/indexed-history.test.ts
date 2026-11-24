@@ -108,6 +108,29 @@ function placedRuns(runs: number[], result: ShapeHandle): string[] {
     return out.sort();
 }
 
+/** `[input, position, resultPosition]` triples with the result sub-shape told by place. */
+function placedKept(triples: number[], result: ShapeHandle, kind: number): string[] {
+    const out: string[] = [];
+    for (let i = 0; i < triples.length; i += 3) {
+        out.push(JSON.stringify([triples[i], triples[i + 1], place(result, kind, triples[i + 2]!)]));
+    }
+    return out.sort();
+}
+
+/**
+ * `[input, position, resultPosition]` for each sub-shape of `inputs` that `result`
+ * holds itself, found by isSame alone: what `keptIndexed` must say.
+ */
+function keptBySame(inputs: ShapeHandle[], kind: "face" | "edge", result: ShapeHandle): number[] {
+    const held = sub(result, kind);
+    return inputs.flatMap((input, i) =>
+        sub(input, kind).flatMap((s, position) => {
+            const found = held.findIndex((r) => kernel.isSame(s, r));
+            return found < 0 ? [] : [i, position, found];
+        }),
+    );
+}
+
 /**
  * The indexed lists, input positions as they are and result positions told by
  * place: a boolean can order its result's sub-shapes differently from one run to
@@ -134,6 +157,8 @@ function indexedLists(evo: EvolutionData) {
         first: faces(evo.firstShapeIndexed),
         last: faces(evo.lastShapeIndexed),
         spine: spine.sort(),
+        kept: placedKept(evo.keptIndexed, evo.result, 4),
+        edgeKept: placedKept(evo.edgeKeptIndexed, evo.result, 6),
     };
 }
 
@@ -160,6 +185,15 @@ function expectIndexed(evo: EvolutionData, inputs: ShapeHandle[], again?: Evolut
     const faces = sub(result, "face");
     expect(evo.firstShapeIndexed.map((i) => hash(faces[i]!))).toEqual(evo.firstShape);
     expect(evo.lastShapeIndexed.map((i) => hash(faces[i]!))).toEqual(evo.lastShape);
+
+    // Each kept triple names an input sub-shape and the result position that is it.
+    for (const [kept, kind] of [[evo.keptIndexed, "face"], [evo.edgeKeptIndexed, "edge"]] as const) {
+        expect(kept.length % 3).toBe(0);
+        for (let i = 0; i < kept.length; i += 3) {
+            const input = at(inputs[kept[i]!]!, kind, kept[i + 1]!);
+            expect(kernel.isSame(input, at(result, kind, kept[i + 2]!)), `${kind} ${kept.slice(i, i + 3)}`).toBe(true);
+        }
+    }
 
     if (again) {
         expect(again.inputShapes.every((h, i) => i % 3 !== 0 || h === 0)).toBe(true);
@@ -242,5 +276,57 @@ describe("indexed history", () => {
         const evo = kernel.loftWithHistory(wires, true, false, [], BOUND);
         expectIndexed(evo, wires, kernel.loftWithHistory(wires, true, false, [], 1));
         expect(evo.edgeGeneratedIndexed.length).toBeGreaterThan(0);
+    });
+});
+
+describe("kept sub-shapes", () => {
+    it("names every face and edge of both inputs that a boolean's result holds itself", () => {
+        const [a, b] = boxes();
+        const hashes = faceHashes(a, b);
+        for (const evo of [
+            kernel.fuseWithHistory(a, b, hashes, BOUND),
+            kernel.cutWithHistory(a, b, hashes, BOUND),
+            kernel.intersectWithHistory(a, b, hashes, BOUND),
+        ]) {
+            expect(evo.keptIndexed).toEqual(keptBySame([a, b], "face", evo.result));
+            expect(evo.edgeKeptIndexed).toEqual(keptBySame([a, b], "edge", evo.result));
+        }
+        // The fuse keeps the three faces of each box that the other does not reach.
+        const fused = kernel.fuseWithHistory(a, b, hashes, BOUND);
+        expect(fused.keptIndexed.filter((_, i) => i % 3 === 0)).toEqual([0, 0, 0, 1, 1, 1]);
+    });
+
+    it("says where a kept face is in the result when every hash is the same", () => {
+        // With a bound of 1 every hash is 0, so a hash list cannot say which result face
+        // an untouched input face is. The kept list still names each one.
+        const [a, b] = boxes();
+        const evo = kernel.cutWithHistory(a, b, [0], 1);
+        expect(evo.keptIndexed.length).toBeGreaterThan(0);
+        expect(evo.keptIndexed).toEqual(keptBySame([a, b], "face", evo.result));
+        expect(evo.edgeKeptIndexed).toEqual(keptBySame([a, b], "edge", evo.result));
+    });
+
+    it("names the faces a fillet leaves as they were", () => {
+        const box = kernel.makeBox(10, 10, 10);
+        const [edge] = sub(box, "edge");
+        const evo = kernel.filletWithHistory(box, [edge!], 1, faceHashes(box), BOUND);
+        expect(evo.keptIndexed).toEqual(keptBySame([box], "face", evo.result));
+        expect(evo.keptIndexed.length / 3).toBeGreaterThan(0);
+        expect(evo.keptIndexed.length / 3).toBeLessThan(6);
+    });
+
+    it("names nothing a copy holds, since every image is a new sub-shape", () => {
+        const box = kernel.makeBox(10, 10, 10);
+        const evo = kernel.translateWithHistory(box, 5, 0, 0, faceHashes(box), BOUND);
+        expect(evo.keptIndexed).toEqual([]);
+        expect(evo.edgeKeptIndexed).toEqual([]);
+        expect(evo.modifiedIndexed.length / 5).toBe(6);
+    });
+
+    it("names only the tracked faces, and every edge", () => {
+        const [a, b] = boxes();
+        const evo = kernel.fuseWithHistory(a, b, faceHashes(a), BOUND);
+        expect(evo.keptIndexed).toEqual(keptBySame([a], "face", evo.result));
+        expect(evo.edgeKeptIndexed).toEqual(keptBySame([a, b], "edge", evo.result));
     });
 });

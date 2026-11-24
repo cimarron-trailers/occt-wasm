@@ -19,6 +19,12 @@ export interface Mesh {
     triangleCount: number;
     /** Per-face triangle groups: [triStart, triCount, faceHash] triples. Present when using meshShape(). */
     faceGroups?: Int32Array | undefined;
+    /**
+     * Each face group's face by position, one per group: the index into
+     * `getSubShapes(shape, "face")`. Unlike the group's hash, no two faces share
+     * one. Present when using meshShape().
+     */
+    facePositions?: Int32Array | undefined;
     /** Number of face groups. Present when using meshShape(). */
     faceCount?: number | undefined;
 }
@@ -617,10 +623,42 @@ export interface EdgeData {
     points: Float32Array;
     /** Per-edge groups: [pointStart, pointCount, edgeHash] triples. */
     edgeGroups: Int32Array;
+    /**
+     * Each edge group's edge by position, one per group: the index into
+     * `getSubShapes(shape, "edge")`. A skipped (degenerate) edge has no group, so
+     * a group's index is not its position.
+     */
+    edgePositions: Int32Array;
     /** Total number of floats in points (= number of XYZ coords). */
     pointCount: number;
     /** Number of distinct edges. */
     edgeCount: number;
+}
+
+/**
+ * Which faces, edges and vertices of a shape meet, each named by its 0-based
+ * position in the order {@link OcctKernel.getSubShapes} returns that kind of
+ * sub-shape. Positions are unique within a shape, so unlike hashes two
+ * sub-shapes never share one.
+ */
+export interface PositionAdjacency {
+    /** For each face, its edges, in the face's own order, each once (a seam edge too). */
+    faceEdges: number[][];
+    /** For each face, its vertices, in the face's own order, each once. */
+    faceVertices: number[][];
+    /** For each edge, the faces it bounds, ascending: the inverse of `faceEdges`. */
+    edgeFaces: number[][];
+}
+
+/**
+ * Where each face, edge and vertex of a part sits in a shape, by position: entry
+ * `i` of `faces` is the position in the shape of the part's face `i` (both in
+ * {@link OcctKernel.getSubShapes} order), or -1 where the shape does not hold it.
+ */
+export interface PartPositions {
+    faces: number[];
+    edges: number[];
+    vertices: number[];
 }
 
 /**
@@ -704,6 +742,15 @@ export interface EvolutionData {
      * the profile being input 0.
      */
     spineGeneratedIndexed: number[];
+    /**
+     * `[input, face, resultFace]` triples: each tracked input face the result
+     * holds itself (`isSame`), and its position there. The hash lists need no
+     * such list, since a face the result holds keeps its hash, but a position
+     * does not carry over from input to result.
+     */
+    keptIndexed: number[];
+    /** `keptIndexed` for edges: `[input, edge, resultEdge]` triples. */
+    edgeKeptIndexed: number[];
 }
 
 /** HLR (hidden line removal) projection result, split by visibility and edge category. */

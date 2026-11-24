@@ -32,7 +32,9 @@ EMSCRIPTEN_BINDINGS(occt_wasm) {
         .property("normalCount", &MeshData::normalCount)
         .property("indexCount", &MeshData::indexCount)
         .function("getFaceGroupsPtr", &MeshData::getFaceGroupsPtr)
-        .property("faceGroupCount", &MeshData::faceGroupCount);
+        .function("getFacePositionsPtr", &MeshData::getFacePositionsPtr)
+        .property("faceGroupCount", &MeshData::faceGroupCount)
+        .property("facePositionCount", &MeshData::facePositionCount);
 
     // MeshBatchData
     class_<MeshBatchData>("MeshBatchData")
@@ -58,8 +60,10 @@ EMSCRIPTEN_BINDINGS(occt_wasm) {
     class_<EdgeData>("EdgeData")
         .function("getPointsPtr", &EdgeData::getPointsPtr)
         .function("getEdgeGroupsPtr", &EdgeData::getEdgeGroupsPtr)
+        .function("getEdgePositionsPtr", &EdgeData::getEdgePositionsPtr)
         .property("pointCount", &EdgeData::pointCount)
-        .property("edgeGroupCount", &EdgeData::edgeGroupCount);
+        .property("edgeGroupCount", &EdgeData::edgeGroupCount)
+        .property("edgePositionCount", &EdgeData::edgePositionCount);
 
     // ProjectionData
     value_object<ProjectionData>("ProjectionData")
@@ -134,7 +138,9 @@ EMSCRIPTEN_BINDINGS(occt_wasm) {
         .property("edgeDeletedIndexed", &EvolutionData::edgeDeletedIndexed)
         .property("firstShapeIndexed", &EvolutionData::firstShapeIndexed)
         .property("lastShapeIndexed", &EvolutionData::lastShapeIndexed)
-        .property("spineGeneratedIndexed", &EvolutionData::spineGeneratedIndexed);
+        .property("spineGeneratedIndexed", &EvolutionData::spineGeneratedIndexed)
+        .property("keptIndexed", &EvolutionData::keptIndexed)
+        .property("edgeKeptIndexed", &EvolutionData::edgeKeptIndexed);
 
     // XCAFLabelInfo
     value_object<XCAFLabelInfo>("XCAFLabelInfo")
@@ -268,6 +274,9 @@ EMSCRIPTEN_BINDINGS(occt_wasm) {
         .function("shapeOrientation", &OcctKernel::shapeOrientation)
         .function("iterShapes", &OcctKernel::iterShapes)
         .function("edgeToFaceMap", &OcctKernel::edgeToFaceMap)
+        .function("adjacencyByPosition", &OcctKernel::adjacencyByPosition)
+        .function("subShapePosition", &OcctKernel::subShapePosition)
+        .function("subShapePositionsOf", &OcctKernel::subShapePositionsOf)
         .function("downcast", &OcctKernel::downcast)
         .function("adjacentFaces", &OcctKernel::adjacentFaces)
         .function("sharedEdges", &OcctKernel::sharedEdges)
@@ -413,6 +422,7 @@ EMSCRIPTEN_BINDINGS(occt_wasm) {
         .function("checkpoint", &OcctKernel::checkpoint)
         .function("releaseSince", &OcctKernel::releaseSince)
         .function("getShapeCount", &OcctKernel::getShapeCount)
+        .function("topologyIndexCount", &OcctKernel::topologyIndexCount)
         .function("makeNullShape", &OcctKernel::makeNullShape)
 
         // xcaf
