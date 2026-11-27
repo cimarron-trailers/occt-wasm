@@ -61,7 +61,7 @@ export {
     type WireframeSource,
 } from "./types.js";
 
-export { XCAFDocument, type EmscriptenFS } from "./xcaf-document.js";
+export { XCAFDocument, type EmscriptenFS, type StepLengthUnit } from "./xcaf-document.js";
 import { XCAFDocument as XCAFDocumentImpl } from "./xcaf-document.js";
 
 export {

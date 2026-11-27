@@ -404,6 +404,11 @@ export interface OcctRawKernel {
     xcafImportSTEP(stepData: string): number;
     xcafExportGLTF(docId: number, linDefl: number, angDefl: number): string;
 
+    // XCAF at scale (cimarron-trailers fork): xtask/src/codegen/fork_xcaf.rs.
+    xcafNewAssembly(docId: number): number;
+    xcafAddComponentAt(docId: number, parentTag: number, placedTag: number, r00: number, r01: number, r02: number, tx: number, r10: number, r11: number, r12: number, ty: number, r20: number, r21: number, r22: number, tz: number): number;
+    xcafExportSTEPInUnit(docId: number, unit: string): string;
+
     // Bulk array marshalling — move large arrays in one HEAP copy instead of
     // N per-element push_back() boundary crossings.
     allocBytes(byteCount: number): number;

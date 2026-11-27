@@ -456,6 +456,15 @@ class OcctKernel {
     uint32_t xcafImportSTEP(const std::string& stepData);
     std::string xcafExportGLTF(uint32_t docId, double linDeflection, double angDeflection);
 
+    // --- XCAF at scale (cimarron-trailers fork) ---
+    // Specs in xtask/src/codegen/fork_xcaf.rs: an assembly built by rigid placed
+    // references, its assemblies updated once by the export, written in its own unit.
+    int xcafNewAssembly(uint32_t docId);
+    int xcafAddComponentAt(uint32_t docId, int parentLabelId, int placedLabelId, double r00,
+                           double r01, double r02, double tx, double r10, double r11, double r12,
+                           double ty, double r20, double r21, double r22, double tz);
+    std::string xcafExportSTEPInUnit(uint32_t docId, const std::string& unit);
+
     // --- Surface-based edge/face ---
     uint32_t makeFaceOnSurface(uint32_t faceId, uint32_t wireId);
 

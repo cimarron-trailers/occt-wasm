@@ -84,7 +84,33 @@ export interface RawXCAFKernel {
     xcafExportSTEP(docId: number): string;
     xcafImportSTEP(stepData: string): number;
     xcafExportGLTF(docId: number, linDefl: number, angDefl: number): string;
+    // The cimarron-trailers fork's (xtask/src/codegen/fork_xcaf.rs).
+    xcafNewAssembly(docId: number): number;
+    xcafAddComponentAt(
+        docId: number,
+        parentTag: number,
+        placedTag: number,
+        r00: number,
+        r01: number,
+        r02: number,
+        tx: number,
+        r10: number,
+        r11: number,
+        r12: number,
+        ty: number,
+        r20: number,
+        r21: number,
+        r22: number,
+        tz: number,
+    ): number;
+    xcafExportSTEPInUnit(docId: number, unit: string): string;
 }
+
+/**
+ * A STEP file's length unit: the unit {@link XCAFDocument.exportSTEPInUnit} reads the
+ * shapes' numbers in and writes the file in. (cimarron-trailers fork)
+ */
+export type StepLengthUnit = "MM" | "CM" | "M" | "INCH" | "FT";
 
 /** Emscripten FS interface needed for binary glTF export. */
 export interface EmscriptenFS {
@@ -279,6 +305,68 @@ export class XCAFDocument {
     exportSTEP(): string {
         this.#ensureOpen();
         return wrap("xcafExportSTEP", () => this.#raw.xcafExportSTEP(this.#docId));
+    }
+
+    /**
+     * Add an empty assembly as a root label, to place parts and other
+     * assemblies in with {@link addComponentAt}. (cimarron-trailers fork)
+     */
+    addAssembly(options?: LabelOptions): LabelTag {
+        this.#ensureOpen();
+        const t = wrap("xcafNewAssembly", () => this.#raw.xcafNewAssembly(this.#docId));
+        this.#applyOptions(t, options);
+        return tag(t);
+    }
+
+    /**
+     * Place a part or an assembly this document holds (`placed`) in an
+     * assembly (`parent`, from {@link addAssembly}) by a rigid 3x4 row-major
+     * matrix, the layout {@link getLocation} answers. Each call is a placed
+     * reference, so a label placed many times is written once.
+     *
+     * Throws when the matrix scales, shears or reflects: no STEP placement can.
+     * The assemblies are updated once, by {@link exportSTEPInUnit}, so adding N
+     * components takes time in proportion to N; build an assembly this way
+     * only to export it. (cimarron-trailers fork)
+     */
+    addComponentAt(
+        parent: LabelTag,
+        placed: LabelTag,
+        matrix: readonly number[],
+        options?: LabelOptions,
+    ): LabelTag {
+        this.#ensureOpen();
+        if (matrix.length !== 12) {
+            throw new OcctError(
+                "xcafAddComponentAt",
+                `The matrix must have 12 elements (3x4, row-major), not ${matrix.length}`,
+            );
+        }
+        const [r00, r01, r02, tx, r10, r11, r12, ty, r20, r21, r22, tz] = matrix as [
+            number, number, number, number, number, number,
+            number, number, number, number, number, number,
+        ];
+        const t = wrap("xcafAddComponentAt", () =>
+            this.#raw.xcafAddComponentAt(
+                this.#docId, parent, placed,
+                r00, r01, r02, tx, r10, r11, r12, ty, r20, r21, r22, tz,
+            ),
+        );
+        this.#applyOptions(t, options);
+        return tag(t);
+    }
+
+    /**
+     * Export as STEP with colors and names, every assembly updated once,
+     * written in `unit`, which is also the unit the shapes' numbers are read
+     * in: the file declares the unit its numbers are in, and none is
+     * converted. (cimarron-trailers fork)
+     */
+    exportSTEPInUnit(unit: StepLengthUnit): string {
+        this.#ensureOpen();
+        return wrap("xcafExportSTEPInUnit", () =>
+            this.#raw.xcafExportSTEPInUnit(this.#docId, unit),
+        );
     }
 
     /**

@@ -350,6 +350,9 @@ EMSCRIPTEN_BINDINGS(occt_wasm) {
         .function("xcafExportSTEP", &OcctKernel::xcafExportSTEP)
         .function("xcafImportSTEP", &OcctKernel::xcafImportSTEP)
         .function("xcafExportGLTF", &OcctKernel::xcafExportGLTF)
+        .function("xcafNewAssembly", &OcctKernel::xcafNewAssembly)
+        .function("xcafAddComponentAt", &OcctKernel::xcafAddComponentAt)
+        .function("xcafExportSTEPInUnit", &OcctKernel::xcafExportSTEPInUnit)
 
         // marshal
         .function("allocBytes", &OcctKernel::allocBytes)

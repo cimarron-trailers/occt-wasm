@@ -61,6 +61,7 @@
 #include <BRep_Tool.hxx>
 #include <BinTools.hxx>
 #include <Bnd_Box.hxx>
+#include <DESTEP_Parameters.hxx>
 #include <GCPnts_AbscissaPoint.hxx>
 #include <GCPnts_TangentialDeflection.hxx>
 #include <GC_MakeArcOfCircle.hxx>
@@ -129,6 +130,7 @@
 #include <TCollection_ExtendedString.hxx>
 #include <TDF_Label.hxx>
 #include <TDataStd_Name.hxx>
+#include <TDataStd_UAttribute.hxx>
 #include <TDocStd_Application.hxx>
 #include <TDocStd_Document.hxx>
 #include <TopAbs_Orientation.hxx>
@@ -146,6 +148,8 @@
 #include <TopoDS_Iterator.hxx>
 #include <TopoDS_Shape.hxx>
 #include <TopoDS_Wire.hxx>
+#include <UnitsMethods_LengthUnit.hxx>
+#include <XCAFDoc.hxx>
 #include <XCAFDoc_ColorTool.hxx>
 #include <XCAFDoc_ColorType.hxx>
 #include <XCAFDoc_DocumentTool.hxx>
@@ -4911,6 +4915,138 @@ std::string OcctKernel::xcafExportGLTF(uint32_t docId, double linDeflection, dou
         return tmpPath;
     } catch (const Standard_Failure& e) {
         throw std::runtime_error(std::string("xcafExportGLTF: ") + e.what());
+    }
+}
+
+int OcctKernel::xcafNewAssembly(uint32_t docId) {
+    try {
+        auto it = xcafDocs_.find(docId);
+        if (it == xcafDocs_.end())
+            throw std::runtime_error("xcafNewAssembly: invalid document ID");
+        
+        Handle(XCAFDoc_ShapeTool) shapeTool =
+            XCAFDoc_DocumentTool::ShapeTool(it->second.doc->Main());
+        TDF_Label label = shapeTool->NewShape();
+        TDataStd_UAttribute::Set(label, XCAFDoc::AssemblyGUID());
+        return registerLabel(it->second, label);
+    } catch (const Standard_Failure& e) {
+        throw std::runtime_error(std::string("xcafNewAssembly: ") + e.what());
+    }
+}
+
+int OcctKernel::xcafAddComponentAt(uint32_t docId, int parentLabelId, int placedLabelId, double r00, double r01, double r02, double tx, double r10, double r11, double r12, double ty, double r20, double r21, double r22, double tz) {
+    try {
+        auto it = xcafDocs_.find(docId);
+        if (it == xcafDocs_.end())
+            throw std::runtime_error("xcafAddComponentAt: invalid document ID");
+        
+        Handle(XCAFDoc_ShapeTool) shapeTool =
+            XCAFDoc_DocumentTool::ShapeTool(it->second.doc->Main());
+        TDF_Label parentLabel = lookupLabel(it->second.labelRegistry, parentLabelId);
+        TDF_Label placedLabel = lookupLabel(it->second.labelRegistry, placedLabelId);
+        if (!shapeTool->IsAssembly(parentLabel))
+            throw std::runtime_error("xcafAddComponentAt: the parent must be an assembly");
+        if (shapeTool->IsReference(placedLabel))
+            throw std::runtime_error(
+                "xcafAddComponentAt: the placed label must be a part or an assembly, not a component");
+        if (placedLabel == parentLabel)
+            throw std::runtime_error("xcafAddComponentAt: an assembly cannot contain itself");
+        
+        // A STEP component's placement is rigid: a rotation and a translation. A matrix
+        // that scales, shears or reflects is refused here, never written as another.
+        const double r[3][3] = {{r00, r01, r02}, {r10, r11, r12}, {r20, r21, r22}};
+        for (int i = 0; i < 3; ++i) {
+            for (int j = 0; j < 3; ++j) {
+                const double dot = r[0][i] * r[0][j] + r[1][i] * r[1][j] + r[2][i] * r[2][j];
+                if (std::abs(dot - (i == j ? 1.0 : 0.0)) > 1e-9)
+                    throw std::runtime_error(
+                        "xcafAddComponentAt: the placement is not rigid: it scales or shears");
+            }
+        }
+        const double det = r00 * (r11 * r22 - r12 * r21) - r01 * (r10 * r22 - r12 * r20) +
+                           r02 * (r10 * r21 - r11 * r20);
+        if (det < 0)
+            throw std::runtime_error(
+                "xcafAddComponentAt: the placement reflects, and a component cannot be mirrored");
+        
+        gp_Trsf trsf;
+        trsf.SetValues(r00, r01, r02, tx, r10, r11, r12, ty, r20, r21, r22, tz);
+        TDF_Label compLabel = shapeTool->AddComponent(parentLabel, placedLabel, TopLoc_Location(trsf));
+        if (compLabel.IsNull())
+            throw std::runtime_error("xcafAddComponentAt: the component was not added");
+        // No UpdateAssemblies here: it recomputes every assembly in the document, so
+        // running it per component made adding N of them quadratic. The export runs it
+        // once, before it writes.
+        return registerLabel(it->second, compLabel);
+    } catch (const Standard_Failure& e) {
+        throw std::runtime_error(std::string("xcafAddComponentAt: ") + e.what());
+    }
+}
+
+std::string OcctKernel::xcafExportSTEPInUnit(uint32_t docId, const std::string& unit) {
+    try {
+        auto it = xcafDocs_.find(docId);
+        if (it == xcafDocs_.end())
+            throw std::runtime_error("xcafExportSTEPInUnit: invalid document ID");
+        
+        UnitsMethods_LengthUnit fileUnit;
+        double metresPerUnit;
+        if (unit == "MM") {
+            fileUnit = UnitsMethods_LengthUnit_Millimeter;
+            metresPerUnit = 0.001;
+        } else if (unit == "CM") {
+            fileUnit = UnitsMethods_LengthUnit_Centimeter;
+            metresPerUnit = 0.01;
+        } else if (unit == "M") {
+            fileUnit = UnitsMethods_LengthUnit_Meter;
+            metresPerUnit = 1.0;
+        } else if (unit == "INCH") {
+            fileUnit = UnitsMethods_LengthUnit_Inch;
+            metresPerUnit = 0.0254;
+        } else if (unit == "FT") {
+            fileUnit = UnitsMethods_LengthUnit_Foot;
+            metresPerUnit = 0.3048;
+        } else {
+            throw std::runtime_error("xcafExportSTEPInUnit: unknown unit '" + unit +
+                                     "': MM, CM, M, INCH or FT");
+        }
+        
+        Handle(XCAFDoc_ShapeTool) shapeTool =
+            XCAFDoc_DocumentTool::ShapeTool(it->second.doc->Main());
+        // Once, for every component xcafAddComponentAt added.
+        shapeTool->UpdateAssemblies();
+        XCAFDoc_DocumentTool::SetLengthUnit(it->second.doc, metresPerUnit);
+        
+        // The writer first: making it initialises OCCT's STEP statics, which the
+        // parameters are read from. Read before it, on a module's first export, they
+        // were unset, and every placement of a part was written as a part of its own.
+        STEPCAFControl_Writer writer;
+        DESTEP_Parameters params;
+        params.InitFromStatic();
+        params.WriteUnit = fileUnit;
+        
+        writer.SetColorMode(Standard_True);
+        writer.SetNameMode(Standard_True);
+        // As upstream's xcafExportSTEP: without DirectFaces a cone's lateral faces are
+        // dropped from the output.
+        ShapeProcess::OperationsFlags spFlags;
+        spFlags.set(ShapeProcess::Operation::DirectFaces);
+        spFlags.set(ShapeProcess::Operation::SplitCommonVertex);
+        writer.SetShapeProcessFlags(spFlags);
+        
+        if (!writer.Transfer(it->second.doc, params, STEPControl_AsIs))
+            throw std::runtime_error("xcafExportSTEPInUnit: transfer failed");
+        
+        std::string tmpPath = "/tmp/xcaf_export_in_unit.step";
+        if (writer.Write(tmpPath.c_str()) != IFSelect_RetDone)
+            throw std::runtime_error("xcafExportSTEPInUnit: write failed");
+        
+        std::ifstream ifs(tmpPath);
+        std::string content((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
+        std::remove(tmpPath.c_str());
+        return content;
+    } catch (const Standard_Failure& e) {
+        throw std::runtime_error(std::string("xcafExportSTEPInUnit: ") + e.what());
     }
 }
 
